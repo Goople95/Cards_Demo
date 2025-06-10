@@ -7,6 +7,7 @@ class SlotReel extends StatefulWidget {
   final Map<String, String> imagePath;
   final Duration delay;
   final VoidCallback onStopped;
+  final bool shouldSpin; // 新增：是否应该开始滚动
 
   const SlotReel({
     super.key,
@@ -15,6 +16,7 @@ class SlotReel extends StatefulWidget {
     required this.imagePath,
     required this.delay,
     required this.onStopped,
+    required this.shouldSpin,
   });
 
   @override
@@ -24,52 +26,78 @@ class SlotReel extends StatefulWidget {
 class _SlotReelState extends State<SlotReel> {
   late final FixedExtentScrollController _ctrl;
   late final Random _rng = Random();
-  bool _isScrolling = false; // 添加滚动状态标记
+  bool _isSpinning = false;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = FixedExtentScrollController();
+    // 初始位置设置为一个中间位置，避免边界问题
+    final initialPos = widget.cardPool.length * 2;
+    _ctrl = FixedExtentScrollController(initialItem: initialPos);
   }
 
   @override
   void didUpdateWidget(covariant SlotReel old) {
     super.didUpdateWidget(old);
-    if (old.targetCard != widget.targetCard && !_isScrolling) {
+    
+    // 当 shouldSpin 从 false 变为 true 时开始滚动
+    if (!old.shouldSpin && widget.shouldSpin && !_isSpinning) {
       _scrollTo(widget.targetCard);
     }
   }
 
   void _scrollTo(String card) async {
-    if (_isScrolling) return; // 防止重复滚动
+    if (_isSpinning) return;
     
-    _isScrolling = true;
-    final target = widget.cardPool.indexOf(card);
+    setState(() {
+      _isSpinning = true;
+    });
+
+    final targetIndex = widget.cardPool.indexOf(card);
+    if (targetIndex == -1) {
+      setState(() {
+        _isSpinning = false;
+      });
+      widget.onStopped();
+      return;
+    }
+    
+    // 计算在扩展列表中的多个可能位置，选择一个靠后的位置
+    final possibleTargets = <int>[];
+    for (int cycle = 0; cycle < 30 ~/ widget.cardPool.length; cycle++) {
+      possibleTargets.add(targetIndex + cycle * widget.cardPool.length);
+    }
+    
+    // 选择一个靠后但不是最后的位置作为目标
+    final finalTarget = possibleTargets[possibleTargets.length - 2];
     
     try {
-      // 先滚到随机位置
-      final randomStart = _rng.nextInt(widget.cardPool.length * 3) + widget.cardPool.length;
+      // 先快速滚动一段距离创造效果
+      final currentPos = _ctrl.selectedItem;
+      final spinDistance = _rng.nextInt(20) + 15; // 15-35的随机距离
+      final tempTarget = currentPos + spinDistance;
+      
       await _ctrl.animateToItem(
-        randomStart,
-        duration: const Duration(milliseconds: 100),
-        curve: Curves.linear,
+        tempTarget,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
       );
       
-      // 再滚到目标
-      final targetItem = target + widget.cardPool.length * 5;
+      // 然后滚到真正的目标位置
       await _ctrl.animateToItem(
-        targetItem,
-        duration: const Duration(milliseconds: 700),
+        finalTarget,
+        duration: const Duration(milliseconds: 800),
         curve: Curves.easeOutCubic,
       );
-      
-      _isScrolling = false;
-      widget.onStopped();
     } catch (e) {
-      _isScrolling = false;
-      // 如果动画被中断，仍然调用回调
-      widget.onStopped();
+      print('Animation error: $e');
     }
+    
+    setState(() {
+      _isSpinning = false;
+    });
+    
+    widget.onStopped();
   }
 
   @override
@@ -86,7 +114,7 @@ class _SlotReelState extends State<SlotReel> {
           controller: _ctrl,
           itemExtent: 100,
           physics: const NeverScrollableScrollPhysics(),
-          perspective: .002,
+          perspective: 0.002,
           childDelegate: ListWheelChildBuilderDelegate(
             childCount: extended.length,
             builder: (_, i) {
@@ -95,17 +123,21 @@ class _SlotReelState extends State<SlotReel> {
               return Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Image.asset('assets/cards/$img',
-                      width: 55,
-                      height: 55,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          const Icon(Icons.image_not_supported, size: 35)),
+                  Image.asset(
+                    'assets/cards/$img',
+                    width: 55,
+                    height: 55,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                        const Icon(Icons.image_not_supported, size: 35),
+                  ),
                   const SizedBox(height: 2),
-                  Text(card, 
-                      style: const TextStyle(fontSize: 12),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
+                  Text(
+                    card,
+                    style: const TextStyle(fontSize: 12),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ],
               );
             },
