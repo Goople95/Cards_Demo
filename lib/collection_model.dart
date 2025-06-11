@@ -26,16 +26,13 @@ class CardCollection {
       
       if (count == 2) {
         // 2张相同：增加1/4进度
-        _progress[cardName] = (_progress[cardName] ?? 0) + 1;
+        final currentProgress = _progress[cardName] ?? 0;
+        _progress[cardName] = (currentProgress + 1).clamp(0, 4);
       } else if (count == 3) {
         // 3张相同：直接完成收集
         _progress[cardName] = 4;
       }
-      
-      // 确保不超过最大进度
-      if (_progress[cardName]! > 4) {
-        _progress[cardName] = 4;
-      }
+      // 当 count 为 1 时，不执行任何操作
     }
   }
   

@@ -7,149 +7,120 @@ class SlotReel extends StatefulWidget {
   final Map<String, String> imagePath;
   final Duration delay;
   final VoidCallback onStopped;
-  final bool shouldSpin; // 新增：是否应该开始滚动
+  final bool isSpinning;
 
   const SlotReel({
-    super.key,
+    Key? key,
     required this.cardPool,
     required this.targetCard,
     required this.imagePath,
     required this.delay,
     required this.onStopped,
-    required this.shouldSpin,
-  });
+    required this.isSpinning,
+  }) : super(key: key);
 
   @override
   State<SlotReel> createState() => _SlotReelState();
 }
 
 class _SlotReelState extends State<SlotReel> {
-  late final FixedExtentScrollController _ctrl;
-  late final Random _rng = Random();
-  bool _isSpinning = false;
+  late FixedExtentScrollController _ctrl;
 
   @override
   void initState() {
     super.initState();
-    // 初始位置设置为一个中间位置，避免边界问题
-    final initialPos = widget.cardPool.length * 2;
-    _ctrl = FixedExtentScrollController(initialItem: initialPos);
+    _ctrl = FixedExtentScrollController();
+    print('SlotReel initState for ${widget.targetCard}');
+
+    // 在第一帧渲染后，立即跳转到初始卡片位置，无动画
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        final initialIndex = widget.cardPool.indexOf(widget.targetCard);
+        if (initialIndex != -1) {
+          _ctrl.jumpToItem(initialIndex);
+        }
+      }
+    });
   }
 
   @override
-  void didUpdateWidget(covariant SlotReel old) {
-    super.didUpdateWidget(old);
-    
-    // 当 shouldSpin 从 false 变为 true 时开始滚动
-    if (!old.shouldSpin && widget.shouldSpin && !_isSpinning) {
-      _scrollTo(widget.targetCard);
+  void didUpdateWidget(SlotReel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // 核心改动：只要父组件启动了 spin (isSpinning 变为 true)，就无条件触发滚动
+    if (widget.isSpinning && !oldWidget.isSpinning) {
+      print('SlotReel received spin command for card: ${widget.targetCard}, starting to spin.');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollTo(widget.targetCard);
+      });
     }
   }
 
-  void _scrollTo(String card) async {
-    if (_isSpinning) return;
-    
-    setState(() {
-      _isSpinning = true;
-    });
+  void _scrollTo(String card) {
+    if (!mounted) return;
 
     final targetIndex = widget.cardPool.indexOf(card);
     if (targetIndex == -1) {
-      setState(() {
-        _isSpinning = false;
-      });
+      print('Error: Card "$card" not found in pool.');
       widget.onStopped();
       return;
     }
-    
-    // 计算在扩展列表中的多个可能位置，选择一个靠后的位置
-    final possibleTargets = <int>[];
-    for (int cycle = 0; cycle < 30 ~/ widget.cardPool.length; cycle++) {
-      possibleTargets.add(targetIndex + cycle * widget.cardPool.length);
-    }
-    
-    // 选择一个靠后但不是最后的位置作为目标
-    final finalTarget = possibleTargets[possibleTargets.length - 2];
-    
-    try {
-      // 先快速滚动一段距离创造效果
-      final currentPos = _ctrl.selectedItem;
-      final spinDistance = _rng.nextInt(20) + 15; // 15-35的随机距离
-      final tempTarget = currentPos + spinDistance;
-      
-      await _ctrl.animateToItem(
-        tempTarget,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-      );
-      
-      // 然后滚到真正的目标位置
-      await _ctrl.animateToItem(
-        finalTarget,
-        duration: const Duration(milliseconds: 800),
-        curve: Curves.easeOutCubic,
-      );
-    } catch (e) {
-      print('Animation error: $e');
-    }
-    
-    setState(() {
-      _isSpinning = false;
+
+    // 为了制造旋转效果，计算一个较远的目标索引
+    // 例如：旋转5圈，然后停在目标卡片上
+    final loops = 5;
+    final itemsLength = widget.cardPool.length;
+    final currentIndex = _ctrl.selectedItem;
+    // 计算从当前位置需要旋转多少个item
+    final itemsToSpin = (loops * itemsLength) + targetIndex - (currentIndex % itemsLength);
+    final targetItem = currentIndex + itemsToSpin;
+
+    _ctrl.animateToItem(
+      targetItem,
+      duration: const Duration(milliseconds: 300), // 动画时长：从800ms -> 300ms (光速！)
+      curve: Curves.easeOut, // 使用更快的缓动曲线
+    ).then((_) {
+      if (mounted) {
+        print('SlotReel animation finished for $card.');
+        widget.onStopped();
+      }
     });
-    
-    widget.onStopped();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final extended = List.generate(
-        30, (i) => widget.cardPool[i % widget.cardPool.length]);
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 4),
-      child: SizedBox(
-        width: 100,
-        height: 140,
-        child: ListWheelScrollView.useDelegate(
-          controller: _ctrl,
-          itemExtent: 100,
-          physics: const NeverScrollableScrollPhysics(),
-          perspective: 0.002,
-          childDelegate: ListWheelChildBuilderDelegate(
-            childCount: extended.length,
-            builder: (_, i) {
-              final card = extended[i];
-              final img = widget.imagePath[card] ?? 'default.png';
-              return Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Image.asset(
-                    'assets/cards/$img',
-                    width: 55,
-                    height: 55,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) =>
-                        const Icon(Icons.image_not_supported, size: 35),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    card,
-                    style: const TextStyle(fontSize: 12),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-      ),
-    );
   }
 
   @override
   void dispose() {
     _ctrl.dispose();
     super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 150,
+      width: 90,
+      child: ListWheelScrollView.useDelegate(
+        controller: _ctrl,
+        itemExtent: 70,
+        physics: const FixedExtentScrollPhysics(),
+        perspective: 0.005,
+        useMagnifier: true,
+        magnification: 1.2,
+        childDelegate: ListWheelChildLoopingListDelegate(
+          children: widget.cardPool.map((card) {
+            final imageName = widget.imagePath[card] ?? 'default.png';
+            final imagePath = 'assets/cards/$imageName';
+            return Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                image: DecorationImage(
+                  image: AssetImage(imagePath),
+                  fit: BoxFit.contain,
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
   }
 }
