@@ -17,41 +17,58 @@ class SlotGamePage extends StatefulWidget {
 }
 
 class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMixin {
-  // region State & Business Logic
-  late List<SlotReel> _reels;
-  late List<CollectionCard> _collection;
-  late ThemeModel _currentTheme;
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  // region State Variables
+  late AudioPlayer _audioPlayer;
   late ConfettiController _confettiController;
-
+  late ThemeModel _currentTheme;
+  late List<CollectionCard> _collection;
+  late List<SlotReel> _reels;
+  late List<GlobalKey<SlotReelState>> _reelKeys;
+  
   int _spinCount = 0;
   int _fragmentCount = 0;
+  bool _isButtonPressed = false;
+  final List<_FragmentParticle> _fragmentParticles = [];
 
   final Map<String, AnimationController> _animationControllers = {};
   final Map<String, Animation<double>> _animations = {};
 
-  bool _isButtonPressed = false;
-
-  final GlobalKey _fragmentCounterKey = GlobalKey();
   final GlobalKey _slotMachineKey = GlobalKey();
-  final List<Widget> _fragmentParticles = [];
+  final GlobalKey _fragmentCounterKey = GlobalKey();
+  // endregion
 
   @override
   void initState() {
     super.initState();
+    _audioPlayer = AudioPlayer();
     _confettiController = ConfettiController(duration: const Duration(seconds: 2));
     _currentTheme = themes['uk']!;
     _initializeGame();
   }
 
   void _initializeGame() {
+    // 清理旧的动画控制器
+    _animationControllers.values.forEach((controller) => controller.dispose());
+    _animationControllers.clear();
+    _animations.clear();
+    
+    // 重新初始化集合和转轮
     _collection = _currentTheme.cards.map((e) => e.clone()).toList();
+    
+    // 创建新的GlobalKey列表
+    _reelKeys = List.generate(3, (index) => GlobalKey<SlotReelState>());
+    
     _reels = List.generate(3, (index) => SlotReel(
+      key: _reelKeys[index],
       cardPool: _collection,
       themeAssetPath: _currentTheme.assetPath,
     ));
-    _loadState();
+    
+    // 为新的卡牌设置动画
     _collection.forEach(_setupAnimations);
+    
+    // 加载状态
+    _loadState();
   }
 
   void _setupAnimations(CollectionCard card) {
@@ -138,34 +155,50 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   }
 
   void _onSpin() async {
-    if (_reels.any((reel) => reel.isSpinning)) return;
+    if (_reelKeys.any((key) => key.currentState?.isSpinning ?? true)) return;
 
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     _playSpinStartSound();
     setState(() => _isButtonPressed = true);
-    Future.delayed(const Duration(milliseconds: 200), () => setState(() => _isButtonPressed = false));
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (mounted) {
+        setState(() => _isButtonPressed = false);
+      }
+    });
 
-    final futures = _reels.map((reel) => reel.spin());
-    final List<CollectionCard> finalResults = await Future.wait(futures);
+    try {
+      final futures = _reelKeys.map((key) => key.currentState!.spin());
+      final List<CollectionCard> finalResults = await Future.wait(futures);
 
-    setState(() => _spinCount++);
-    _checkResult(finalResults);
-    _saveState();
+      if (mounted) {
+        setState(() => _spinCount++);
+        _checkResult(finalResults);
+        _saveState();
+      }
+    } catch (e) {
+      // No error logging
+    }
   }
 
   void _cheat(String cardName) {
-    if (_reels.any((reel) => reel.isSpinning)) return;
+    if (_reelKeys.any((key) => key.currentState?.isSpinning ?? true)) return;
 
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     _playSpinStartSound();
     setState(() => _isButtonPressed = true);
-    Future.delayed(const Duration(milliseconds: 200), () => setState(() => _isButtonPressed = false));
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (mounted) {
+        setState(() => _isButtonPressed = false);
+      }
+    });
 
-    final futures = _reels.map((reel) => reel.spinTo(cardName));
+    final futures = _reelKeys.map((key) => key.currentState!.spinTo(cardName));
     Future.wait(futures).then((finalResults) {
-      setState(() => _spinCount++);
-      _checkResult(finalResults);
-      _saveState();
+      if (mounted) {
+        setState(() => _spinCount++);
+        _checkResult(finalResults);
+        _saveState();
+      }
     });
   }
 
@@ -245,27 +278,87 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     final startRenderBox = startKey.currentContext!.findRenderObject() as RenderBox;
     final endRenderBox = endKey.currentContext!.findRenderObject() as RenderBox;
 
-    // 从老虎机中央位置开始，飞到右上角碎片计数器
-    final startPosition = startRenderBox.localToGlobal(startRenderBox.size.center(Offset.zero));
-    final endPosition = endRenderBox.localToGlobal(endRenderBox.size.center(Offset.zero));
+    // 获取老虎机的中央位置（相对于屏幕），不需要额外偏移
+    final startGlobalCenter = startRenderBox.localToGlobal(
+      Offset(startRenderBox.size.width / 2, startRenderBox.size.height / 2)
+    );
+    
+    // 获取碎片计数器的中央位置（相对于屏幕），不需要额外偏移
+    final endGlobalCenter = endRenderBox.localToGlobal(
+      Offset(endRenderBox.size.width / 2, endRenderBox.size.height / 2)
+    );
 
+    // 创建碎片粒子动画
     for (int i = 0; i < count + 2; i++) {
       final particle = _FragmentParticle(
         key: UniqueKey(),
-        startPosition: startPosition,
-        endPosition: endPosition,
-        onCompleted: (key) => setState(() => _fragmentParticles.removeWhere((p) => p.key == key)),
+        startPosition: startGlobalCenter,
+        endPosition: endGlobalCenter,
+        onCompleted: (key) {
+          if (mounted) {
+            setState(() => _fragmentParticles.removeWhere((p) => p.key == key));
+          }
+        },
       );
-      setState(() => _fragmentParticles.add(particle));
+      if (mounted) {
+        setState(() => _fragmentParticles.add(particle));
+      }
     }
   }
 
   void _changeTheme(String themeKey) {
     if (themes.containsKey(themeKey) && themes[themeKey]!.name != _currentTheme.name) {
+      // 先清除当前状态
       setState(() {
         _currentTheme = themes[themeKey]!;
+      });
+      
+      // 异步重新初始化游戏，确保UI更新后再进行
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         _initializeGame();
       });
+    }
+  }
+
+  void _cheatMatch(int matchCount) async {
+    if (_reelKeys.any((key) => key.currentState?.isSpinning ?? true)) return;
+    if (_collection.isEmpty) return; // 确保集合已初始化
+
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    _playSpinStartSound();
+    setState(() => _isButtonPressed = true);
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (mounted) {
+        setState(() => _isButtonPressed = false);
+      }
+    });
+
+    // 随机选择一张卡牌
+    final random = Random();
+    final targetCard = _collection[random.nextInt(_collection.length)];
+    
+    List<Future<CollectionCard>> futures = [];
+    
+    if (matchCount == 2) {
+      // 2连：前两个轮子显示相同卡牌，第三个轮子随机
+      futures.add(_reelKeys[0].currentState!.spinTo(targetCard.name));
+      futures.add(_reelKeys[1].currentState!.spinTo(targetCard.name));
+      futures.add(_reelKeys[2].currentState!.spin()); // 第三个轮子随机
+    } else {
+      // 3连：所有轮子都显示相同的卡牌
+      futures = _reelKeys.map((key) => key.currentState!.spinTo(targetCard.name)).toList();
+    }
+    
+    try {
+      final finalResults = await Future.wait(futures);
+      
+      if (mounted) {
+        setState(() => _spinCount++);
+        _checkResult(finalResults);
+        _saveState();
+      }
+    } catch (e) {
+      // No error logging
     }
   }
 
@@ -327,7 +420,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   AppBar _buildAppBar() {
     return AppBar(
       title: Text(
-        '英国印象',
+        themeChineseNames[_currentTheme.name] ?? _currentTheme.name,
         style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
       ),
       backgroundColor: Colors.black.withOpacity(0.3),
@@ -475,10 +568,10 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
       },
       onTapCancel: () => setState(() => _isButtonPressed = false),
       child: AnimatedScale(
-        scale: _reels.any((r) => r.isSpinning) ? 1.0 : (_isButtonPressed ? 0.9 : 1.0),
+        scale: _reelKeys.any((key) => key.currentState?.isSpinning ?? false) ? 1.0 : (_isButtonPressed ? 0.9 : 1.0),
         duration: const Duration(milliseconds: 100),
         child: Opacity(
-          opacity: _reels.any((r) => r.isSpinning) ? 0.6 : 1.0,
+          opacity: _reelKeys.any((key) => key.currentState?.isSpinning ?? false) ? 0.6 : 1.0,
           child: Stack(
             alignment: Alignment.center,
             children: [
@@ -582,37 +675,6 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
       onPressed: onPressed,
       child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 12)),
     );
-  }
-
-  void _cheatMatch(int matchCount) async {
-    if (_reels.any((r) => r.isSpinning)) return;
-
-    ScaffoldMessenger.of(context).removeCurrentSnackBar();
-    _playSpinStartSound();
-    setState(() => _isButtonPressed = true);
-    Future.delayed(const Duration(milliseconds: 200), () => setState(() => _isButtonPressed = false));
-
-    // 随机选择一张卡牌
-    final random = Random();
-    final targetCard = _collection[random.nextInt(_collection.length)];
-    
-    List<Future<CollectionCard>> futures = [];
-    
-    if (matchCount == 2) {
-      // 2连：前两个轮子显示相同卡牌，第三个轮子随机
-      futures.add(_reels[0].spinTo(targetCard.name));
-      futures.add(_reels[1].spinTo(targetCard.name));
-      futures.add(_reels[2].spin()); // 第三个轮子随机
-    } else {
-      // 3连：所有轮子都显示相同的卡牌
-      futures = _reels.map((reel) => reel.spinTo(targetCard.name)).toList();
-    }
-    
-    final finalResults = await Future.wait(futures);
-    
-    setState(() => _spinCount++);
-    _checkResult(finalResults);
-    _saveState();
   }
 
   Widget _buildCollectionGrid() {
@@ -792,41 +854,48 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
 // region SlotReel Widget
 class SlotReel extends StatefulWidget {
   final List<CollectionCard> cardPool;
-  late final List<CollectionCard> shuffledPool;
   final String themeAssetPath;
   final int spinDuration;
 
-  SlotReel({
+  const SlotReel({
     Key? key,
     required this.cardPool,
     required this.themeAssetPath,
     this.spinDuration = 400,
-  }) : super(key: key) {
-    shuffledPool = (List.from(cardPool)..shuffle()).cast<CollectionCard>();
-  }
-
-  late final _SlotReelState state = _SlotReelState();
-
-  Future<CollectionCard> spin() => state.spin();
-  Future<CollectionCard> spinTo(String cardName) => state.spinTo(cardName);
-  CollectionCard get activeCard => state.activeCard;
-  bool get isSpinning => state.isSpinning;
+  }) : super(key: key);
 
   @override
-  _SlotReelState createState() => state;
+  SlotReelState createState() => SlotReelState();
 }
 
-class _SlotReelState extends State<SlotReel> with SingleTickerProviderStateMixin {
+class SlotReelState extends State<SlotReel> with SingleTickerProviderStateMixin {
   late FixedExtentScrollController _scrollController;
+  late List<CollectionCard> _shuffledPool;
   int _activeIndex = 0;
   bool isSpinning = false;
   
-  CollectionCard get activeCard => widget.shuffledPool[_activeIndex];
+  CollectionCard get activeCard => _shuffledPool[_activeIndex];
 
   @override
   void initState() {
     super.initState();
     _scrollController = FixedExtentScrollController();
+    _updatePool();
+  }
+  
+  @override
+  void didUpdateWidget(SlotReel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 如果卡牌池或主题路径发生变化，重新创建shuffled pool
+    if (oldWidget.cardPool != widget.cardPool || 
+        oldWidget.themeAssetPath != widget.themeAssetPath) {
+      _updatePool();
+    }
+  }
+  
+  void _updatePool() {
+    _shuffledPool = List.from(widget.cardPool)..shuffle();
+    _activeIndex = 0;
   }
   
   Future<CollectionCard> spin() async {
@@ -834,11 +903,11 @@ class _SlotReelState extends State<SlotReel> with SingleTickerProviderStateMixin
     if (mounted) setState(() => isSpinning = true);
     
     final random = Random();
-    final int targetPoolIndex = random.nextInt(widget.shuffledPool.length);
+    final int targetPoolIndex = random.nextInt(_shuffledPool.length);
 
-    final int currentLap = (_scrollController.selectedItem / widget.shuffledPool.length).floor();
+    final int currentLap = (_scrollController.selectedItem / _shuffledPool.length).floor();
     final int laps = 3 + random.nextInt(2);
-    final int targetControllerIndex = (currentLap + laps) * widget.shuffledPool.length + targetPoolIndex;
+    final int targetControllerIndex = (currentLap + laps) * _shuffledPool.length + targetPoolIndex;
     
     await _scrollController.animateToItem(
       targetControllerIndex,
@@ -852,21 +921,21 @@ class _SlotReelState extends State<SlotReel> with SingleTickerProviderStateMixin
         isSpinning = false;
       });
     }
-    return widget.shuffledPool[targetPoolIndex];
+    return _shuffledPool[targetPoolIndex];
   }
 
   Future<CollectionCard> spinTo(String cardName) async {
     if (isSpinning) return activeCard;
     if (mounted) setState(() => isSpinning = true);
 
-    final int targetPoolIndex = widget.shuffledPool.indexWhere((c) => c.name == cardName);
+    final int targetPoolIndex = _shuffledPool.indexWhere((c) => c.name == cardName);
     if (targetPoolIndex == -1) {
       return spin();
     }
 
-    final int currentLap = (_scrollController.selectedItem / widget.shuffledPool.length).floor();
+    final int currentLap = (_scrollController.selectedItem / _shuffledPool.length).floor();
     final int laps = 2;
-    final int targetControllerIndex = (currentLap + laps) * widget.shuffledPool.length + targetPoolIndex;
+    final int targetControllerIndex = (currentLap + laps) * _shuffledPool.length + targetPoolIndex;
 
     await _scrollController.animateToItem(
       targetControllerIndex,
@@ -880,7 +949,7 @@ class _SlotReelState extends State<SlotReel> with SingleTickerProviderStateMixin
         isSpinning = false;
       });
     }
-    return widget.shuffledPool[targetPoolIndex];
+    return _shuffledPool[targetPoolIndex];
   }
 
   @override
@@ -909,13 +978,13 @@ class _SlotReelState extends State<SlotReel> with SingleTickerProviderStateMixin
               itemExtent: itemHeight,
               physics: const NeverScrollableScrollPhysics(),
               onSelectedItemChanged: (index) {
-                if (!isSpinning) {
-                  setState(() => _activeIndex = index % widget.shuffledPool.length);
+                if (!isSpinning && mounted) {
+                  setState(() => _activeIndex = index % _shuffledPool.length);
                 }
               },
               childDelegate: ListWheelChildLoopingListDelegate(
-                children: List.generate(widget.shuffledPool.length, (i) {
-                  final card = widget.shuffledPool[i];
+                children: List.generate(_shuffledPool.length, (i) {
+                  final card = _shuffledPool[i];
                   return SizedBox(
                     height: itemHeight,
                     child: Center(

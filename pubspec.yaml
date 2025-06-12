@@ -71,6 +71,7 @@ flutter:
     - assets/cards/Japan/
     - assets/cards/China/
     - "assets/cards/UK 透明/"
+    - assets/house/
 
   # To add assets to your application, add an assets section, like this:
   # assets:
