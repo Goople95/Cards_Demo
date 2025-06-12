@@ -1,6 +1,30 @@
+import 'dart:convert';
+
 // 收集进度模型
 class CardCollection {
   final Map<String, int> _progress = {}; // 卡片名称 -> 进度(0-4)
+  int fragments = 0; // 新增：幸运碎片数量
+  
+  // -- JSON序列化和反序列化 --
+  CardCollection.fromJson(Map<String, dynamic> json) {
+    _progress.clear();
+    final progressMap = json['_progress'] as Map<String, dynamic>?;
+    if (progressMap != null) {
+      progressMap.forEach((key, value) {
+        if (value is int) {
+          _progress[key] = value;
+        }
+      });
+    }
+    fragments = json['fragments'] as int? ?? 0;
+  }
+
+  Map<String, dynamic> toJson() => {
+    '_progress': _progress,
+    'fragments': fragments,
+  };
+
+  CardCollection(); // 添加一个默认的构造函数
   
   // 获取卡片收集进度 (0: 未收集, 1-3: 部分收集, 4: 完成收集)
   int getProgress(String cardName) => _progress[cardName] ?? 0;
@@ -11,8 +35,12 @@ class CardCollection {
   // 获取收集进度百分比 (0.0 - 1.0)
   double getProgressPercent(String cardName) => getProgress(cardName) / 4.0;
   
-  // 更新收集进度
-  void updateProgress(List<String> drawnCards) {
+  // 更新收集进度, 返回 (获得进度的卡牌名, 获得的碎片来源卡牌名, 获得的碎片数)
+  (String?, String?, int) updateProgress(List<String> drawnCards) {
+    int fragmentsGained = 0;
+    String? celebratedCard;
+    String? fragmentSourceCard;
+
     // 统计每张卡片出现次数
     final cardCounts = <String, int>{};
     for (final card in drawnCards) {
@@ -24,16 +52,25 @@ class CardCollection {
       final cardName = entry.key;
       final count = entry.value;
       
-      if (count == 2) {
-        // 2张相同：增加1/4进度
-        final currentProgress = _progress[cardName] ?? 0;
-        _progress[cardName] = (currentProgress + 1).clamp(0, 4);
-      } else if (count == 3) {
-        // 3张相同：直接完成收集
-        _progress[cardName] = 4;
+      if (isCompleted(cardName)) {
+        // 如果卡片已集齐，转化为碎片
+        if (count == 2) fragmentsGained += 1;
+        if (count == 3) fragmentsGained += 3;
+        if(count > 1) fragmentSourceCard = cardName; // 记录碎片的来源
+      } else {
+        // 如果卡片未集齐，正常更新进度
+        if (count == 2) {
+          final currentProgress = _progress[cardName] ?? 0;
+          _progress[cardName] = (currentProgress + 1).clamp(0, 4);
+          celebratedCard = cardName;
+        } else if (count == 3) {
+          _progress[cardName] = 4;
+          celebratedCard = cardName;
+        }
       }
-      // 当 count 为 1 时，不执行任何操作
     }
+    fragments += fragmentsGained;
+    return (celebratedCard, fragmentSourceCard, fragmentsGained);
   }
   
   // 获取总收集进度

@@ -1,0 +1,9 @@
+第一张图片展现樱花飘落背景下的日本传统武士，手持长刀，身姿挺拔。推荐文件名：japan_cherry_blossom_samurai.png
+第二张是宁静的日式庭院，有石灯笼、潺潺流水和翠绿的苔藓。推荐文件名：japanese_garden.png
+第三张描绘了穿着和服的日本少女，手持折扇，面带微笑。推荐文件名：japanese_maiko.png
+第四张呈现日本传统的歌舞伎表演场景，演员妆容夸张，服饰华丽。推荐文件名：kabuki_performance.png
+第五张是富士山在清晨阳光照耀下，山顶覆盖着白雪，山下是错落的村庄。推荐文件名：mt_fuji_village.png
+第六张为日本茶道场景，一位茶艺师正在进行优雅的泡茶动作。推荐文件名：japanese_tea_ceremony.png
+第七张展示日本相扑选手在赛场上准备比赛的瞬间。推荐文件名：sumo_wrestler.png
+第八张是日本金阁寺，在湖水中倒映出金色的光芒。推荐文件名：kinkaku.png
+第九张是色彩斑斓的日本夏日祭典，人们穿着浴衣，手持烟花。推荐文件名：japanese_summer_festival.png

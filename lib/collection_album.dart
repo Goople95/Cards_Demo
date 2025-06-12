@@ -1,25 +1,24 @@
 import 'package:flutter/material.dart';
 import 'collection_model.dart';
+import 'theme_model.dart';
 
 class CollectionAlbum extends StatelessWidget {
   final CardCollection collection;
-  final List<String> cardPool;
-  final Map<String, String> cardImages;
+  final GameTheme theme;
 
   const CollectionAlbum({
     super.key,
     required this.collection,
-    required this.cardPool,
-    required this.cardImages,
+    required this.theme,
   });
 
   @override
   Widget build(BuildContext context) {
-    final stats = collection.getStats(cardPool);
+    final stats = collection.getStats(theme.cardPool);
     
     return Scaffold(
       appBar: AppBar(
-        title: const Text('📚 收集图册'),
+        title: Text('📚 ${theme.name} 图册'),
         backgroundColor: Colors.deepPurple.shade800,
       ),
       body: Column(
@@ -38,9 +37,9 @@ class CollectionAlbum extends StatelessWidget {
                   crossAxisSpacing: 12,
                   mainAxisSpacing: 12,
                 ),
-                itemCount: cardPool.length,
+                itemCount: theme.cardPool.length,
                 itemBuilder: (context, index) {
-                  final cardName = cardPool[index];
+                  final cardName = theme.cardPool[index];
                   return _buildCardItem(cardName);
                 },
               ),
@@ -140,7 +139,7 @@ class CollectionAlbum extends StatelessWidget {
   Widget _buildCardItem(String cardName) {
     final progress = collection.getProgress(cardName);
     final isCompleted = collection.isCompleted(cardName);
-    final imagePath = cardImages[cardName] ?? 'default.png';
+    final imagePath = theme.cardPics[cardName] ?? 'default.png';
     
     return Card(
       elevation: 4,
@@ -207,7 +206,7 @@ class CollectionAlbum extends StatelessWidget {
                             : ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
                                 child: Image.asset(
-                                  'assets/cards/$imagePath',
+                                  'assets/${theme.assetPath}/$imagePath',
                                   width: double.infinity,
                                   height: double.infinity,
                                   fit: BoxFit.cover,

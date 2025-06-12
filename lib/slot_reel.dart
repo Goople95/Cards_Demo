@@ -5,6 +5,7 @@ class SlotReel extends StatefulWidget {
   final List<String> cardPool;
   final String targetCard;
   final Map<String, String> imagePath;
+  final String assetPath;
   final Duration delay;
   final VoidCallback onStopped;
   final bool isSpinning;
@@ -14,6 +15,7 @@ class SlotReel extends StatefulWidget {
     required this.cardPool,
     required this.targetCard,
     required this.imagePath,
+    required this.assetPath,
     required this.delay,
     required this.onStopped,
     required this.isSpinning,
@@ -97,24 +99,36 @@ class _SlotReelState extends State<SlotReel> {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 150,
-      width: 90,
+      width: 100,
       child: ListWheelScrollView.useDelegate(
         controller: _ctrl,
-        itemExtent: 70,
+        itemExtent: 90,
         physics: const FixedExtentScrollPhysics(),
         perspective: 0.005,
         useMagnifier: true,
-        magnification: 1.2,
+        magnification: 1.1,
         childDelegate: ListWheelChildLoopingListDelegate(
           children: widget.cardPool.map((card) {
             final imageName = widget.imagePath[card] ?? 'default.png';
-            final imagePath = 'assets/cards/$imageName';
+            final imagePath = 'assets/${widget.assetPath}/$imageName';
+            
             return Container(
-              alignment: Alignment.center,
+              width: 80,
+              height: 80,
               decoration: BoxDecoration(
+                color: Colors.brown.shade800.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.25),
+                    blurRadius: 5,
+                    offset: const Offset(2, 2),
+                  )
+                ],
                 image: DecorationImage(
                   image: AssetImage(imagePath),
-                  fit: BoxFit.contain,
+                  fit: BoxFit.cover,
                 ),
               ),
             );
