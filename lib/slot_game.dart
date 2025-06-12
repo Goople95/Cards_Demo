@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:confetti/confetti.dart';
-import 'models/collection_model.dart';
 import 'models/theme_model.dart';
 
 class SlotGamePage extends StatefulWidget {
@@ -27,6 +26,9 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   
   int _spinCount = 0;
   int _fragmentCount = 0;
+  int _remainingSpins = 100; // 新增：剩余转动次数
+  String _fragmentGainText = ''; // 碎片增加显示文字
+  bool _showingFragmentGain = false; // 是否正在显示碎片增加动画
   bool _isButtonPressed = false;
   final List<_FragmentParticle> _fragmentParticles = [];
 
@@ -35,7 +37,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
 
   final GlobalKey _slotMachineKey = GlobalKey();
   final GlobalKey _fragmentCounterKey = GlobalKey();
-  // endregion
+  Offset? _fragmentGainOffset;
 
   @override
   void initState() {
@@ -52,15 +54,16 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     _animationControllers.clear();
     _animations.clear();
     
-    // 重新初始化集合和转轮
-    _collection = _currentTheme.cards.map((e) => e.clone()).toList();
+    // 重新初始化集合和转轮（只包含卡牌，不包含道具）
+    _collection = _currentTheme.cards.where((c) => !c.isProp).map((e) => e.clone()).toList();
     
     // 创建新的GlobalKey列表
     _reelKeys = List.generate(3, (index) => GlobalKey<SlotReelState>());
     
+    // 老虎机使用所有物品（包括道具）
     _reels = List.generate(3, (index) => SlotReel(
       key: _reelKeys[index],
-      cardPool: _collection,
+      cardPool: _currentTheme.cards.map((item) => item.clone()).toList(),
       themeAssetPath: _currentTheme.assetPath,
     ));
     
@@ -89,6 +92,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     setState(() {
       _spinCount = prefs.getInt('spinCount_${_currentTheme.name}') ?? 0;
       _fragmentCount = prefs.getInt('fragmentCount_${_currentTheme.name}') ?? 0;
+      _remainingSpins = prefs.getInt('remainingSpins_${_currentTheme.name}') ?? 100;
       
       for (var card in _collection) {
         card.progress = prefs.getInt('card_progress_${_currentTheme.name}_${card.name}') ?? 0;
@@ -100,6 +104,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('spinCount_${_currentTheme.name}', _spinCount);
     await prefs.setInt('fragmentCount_${_currentTheme.name}', _fragmentCount);
+    await prefs.setInt('remainingSpins_${_currentTheme.name}', _remainingSpins);
     for (var card in _collection) {
       await prefs.setInt('card_progress_${_currentTheme.name}_${card.name}', card.progress);
     }
@@ -156,6 +161,12 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
 
   void _onSpin() async {
     if (_reelKeys.any((key) => key.currentState?.isSpinning ?? true)) return;
+    if (_remainingSpins <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('转动次数已用完，请使用刷新按钮重置！')),
+      );
+      return;
+    }
 
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     _playSpinStartSound();
@@ -171,7 +182,10 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
       final List<CollectionCard> finalResults = await Future.wait(futures);
 
       if (mounted) {
-        setState(() => _spinCount++);
+        setState(() {
+          _spinCount++;
+          _remainingSpins--;
+        });
         _checkResult(finalResults);
         _saveState();
       }
@@ -180,32 +194,11 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     }
   }
 
-  void _cheat(String cardName) {
-    if (_reelKeys.any((key) => key.currentState?.isSpinning ?? true)) return;
-
-    ScaffoldMessenger.of(context).removeCurrentSnackBar();
-    _playSpinStartSound();
-    setState(() => _isButtonPressed = true);
-    Future.delayed(const Duration(milliseconds: 200), () {
-      if (mounted) {
-        setState(() => _isButtonPressed = false);
-      }
-    });
-
-    final futures = _reelKeys.map((key) => key.currentState!.spinTo(cardName));
-    Future.wait(futures).then((finalResults) {
-      if (mounted) {
-        setState(() => _spinCount++);
-        _checkResult(finalResults);
-        _saveState();
-      }
-    });
-  }
-
   void _resetProgress() {
     setState(() {
       _spinCount = 0;
       _fragmentCount = 0;
+      _remainingSpins = 100; // 重置转动次数到100
       for (var card in _collection) {
         card.progress = 0;
       }
@@ -221,89 +214,125 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     }
 
     if (counts.containsValue(3)) {
-      final matchedCardName = counts.keys.firstWhere((k) => counts[k] == 3);
-      _handleMatch(matchedCardName, 3);
+      final matchedItemName = counts.keys.firstWhere((k) => counts[k] == 3);
+      _handleMatch(matchedItemName, 3);
     } else if (counts.containsValue(2)) {
-      final matchedCardName = counts.keys.firstWhere((k) => counts[k] == 2);
-      _handleMatch(matchedCardName, 2);
+      final matchedItemName = counts.keys.firstWhere((k) => counts[k] == 2);
+      _handleMatch(matchedItemName, 2);
+    } else {
+      // 三个不同的情况，奖励+3
+      _triggerFragmentAnimationOverlay('三个不同', 3, onComplete: () {
+        _showFragmentGain(3, onComplete: () {
+          setState(() => _fragmentCount += 3);
+          _saveState();
+        });
+      });
+      _playFragmentSound();
     }
   }
 
-  void _handleMatch(String cardName, int matchCount) {
-    final card = _collection.firstWhere((c) => c.name == cardName);
-    bool wasAlreadyCollected = card.isCollected;
+  void _handleMatch(String itemName, int matchCount) {
+    // 检查是否为水晶骰子道具
+    if (itemName == '水晶骰子') {
+      final spinsToAdd = matchCount == 3 ? 100 : (matchCount == 2 ? 25 : 0);
+      if (spinsToAdd > 0) {
+        setState(() => _remainingSpins += spinsToAdd);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('水晶骰子发威！获得 $spinsToAdd 次转动机会！')),
+        );
+        _playMatch3Sound(); // 播放特殊音效
+        _triggerConfetti();
+      }
+      _saveState();
+      return;
+    }
+
+    // 原有卡牌逻辑
+    CollectionCard? card;
+    try {
+      card = _collection.firstWhere((c) => c.name == itemName);
+    } catch (e) {
+      return; // 如果找不到对应卡牌，直接返回
+    }
+
+    bool wasAlreadyCollected = card!.isCollected;
 
     if (wasAlreadyCollected) {
-      final fragmentGain = matchCount == 3 ? 3 : 1;
-      setState(() => _fragmentCount += fragmentGain);
-      _triggerFragmentAnimation(card.name, fragmentGain);
+      // 已收集齐的重复碎片奖励：2连=10，3连=50
+      final fragmentGain = matchCount == 3 ? 50 : 10;
+      _triggerFragmentAnimationOverlay(card!.name, fragmentGain, onComplete: () {
+        _showFragmentGain(fragmentGain, onComplete: () {
+          setState(() => _fragmentCount += fragmentGain);
+          _saveState();
+        });
+      });
       _playFragmentSound();
     } else {
       setState(() {
-        if (matchCount >= 2) { // Both 2 and 3 matches give progress
-            card.progress = min(4, card.progress + (matchCount == 3 ? 4 : 1) );
+        if (matchCount >= 2) {
+          card!.progress = min(4, card!.progress + (matchCount == 3 ? 4 : 1));
         }
       });
 
-      bool isNowCollected = card.isCollected;
+      bool isNowCollected = card!.isCollected;
 
       if (isNowCollected && !wasAlreadyCollected) {
-        // Just completed a card
-        _animationControllers[card.name]?.forward().then((_) => _animationControllers[card.name]?.reverse());
-        _playCollectionCompleteSound(); // New, distinct sound
+        _animationControllers[card!.name]?.forward().then((_) => _animationControllers[card!.name]?.reverse());
+        _playCollectionCompleteSound();
       } else if (!isNowCollected) {
-        // Made progress, but not completed yet (2-match)
-        _animationControllers[card.name]?.forward().then((_) => _animationControllers[card.name]?.reverse());
+        _animationControllers[card!.name]?.forward().then((_) => _animationControllers[card!.name]?.reverse());
         _playMatch2Sound();
       }
 
-      // Confetti and 3-match sound ONLY for a true 3-of-a-kind roll.
       if (matchCount == 3) {
         _playMatch3Sound();
         _triggerConfetti();
       }
     }
-    _saveState(); // Save state after any change
+    _saveState();
   }
 
   void _triggerConfetti() {
     _confettiController.play();
   }
 
-  void _triggerFragmentAnimation(String sourceCardName, int count) {
+  void _triggerFragmentAnimationOverlay(String sourceCardName, int count, {VoidCallback? onComplete}) {
     final startKey = _slotMachineKey;
     final endKey = _fragmentCounterKey;
-    if (startKey.currentContext == null || endKey.currentContext == null) return;
+    if (startKey.currentContext == null || endKey.currentContext == null) {
+      if (onComplete != null) onComplete();
+      return;
+    }
 
     final startRenderBox = startKey.currentContext!.findRenderObject() as RenderBox;
     final endRenderBox = endKey.currentContext!.findRenderObject() as RenderBox;
 
-    // 获取老虎机的中央位置（相对于屏幕），不需要额外偏移
     final startGlobalCenter = startRenderBox.localToGlobal(
-      Offset(startRenderBox.size.width / 2, startRenderBox.size.height / 2)
+      Offset(startRenderBox.size.width / 2, startRenderBox.size.height / 2 - 100),
     );
-    
-    // 获取碎片计数器的中央位置（相对于屏幕），不需要额外偏移
     final endGlobalCenter = endRenderBox.localToGlobal(
-      Offset(endRenderBox.size.width / 2, endRenderBox.size.height / 2)
+      Offset(endRenderBox.size.width / 2, endRenderBox.size.height / 2),
     );
 
-    // 创建碎片粒子动画
-    for (int i = 0; i < count + 2; i++) {
-      final particle = _FragmentParticle(
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    bool completed = false;
+    entry = OverlayEntry(
+      builder: (context) => _FragmentParticle(
         key: UniqueKey(),
         startPosition: startGlobalCenter,
         endPosition: endGlobalCenter,
+        count: count, // 传递星星数量
         onCompleted: (key) {
-          if (mounted) {
-            setState(() => _fragmentParticles.removeWhere((p) => p.key == key));
+          if (!completed) {
+            completed = true;
+            entry.remove();
+            if (onComplete != null) onComplete();
           }
         },
-      );
-      if (mounted) {
-        setState(() => _fragmentParticles.add(particle));
-      }
-    }
+      ),
+    );
+    overlay.insert(entry);
   }
 
   void _changeTheme(String themeKey) {
@@ -323,6 +352,12 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   void _cheatMatch(int matchCount) async {
     if (_reelKeys.any((key) => key.currentState?.isSpinning ?? true)) return;
     if (_collection.isEmpty) return; // 确保集合已初始化
+    if (_remainingSpins <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('转动次数已用完，请使用刷新按钮重置！')),
+      );
+      return;
+    }
 
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     _playSpinStartSound();
@@ -353,13 +388,35 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
       final finalResults = await Future.wait(futures);
       
       if (mounted) {
-        setState(() => _spinCount++);
+        setState(() {
+          _spinCount++;
+          _remainingSpins--; // 作弊也消耗转动次数
+        });
         _checkResult(finalResults);
         _saveState();
       }
     } catch (e) {
       // No error logging
     }
+  }
+
+  void _showFragmentGain(int count, {VoidCallback? onComplete}) {
+    final RenderBox? box = _fragmentCounterKey.currentContext?.findRenderObject() as RenderBox?;
+    final Offset? global = box?.localToGlobal(Offset(box.size.width / 2, box.size.height / 2));
+    setState(() {
+      _fragmentGainText = '+$count';
+      _showingFragmentGain = true;
+      _fragmentGainOffset = global;
+    });
+
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      if (mounted) {
+        setState(() {
+          _showingFragmentGain = false;
+        });
+        if (onComplete != null) onComplete();
+      }
+    });
   }
 
   // endregion
@@ -412,6 +469,8 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
             minBlastForce: 10,
           ),
           ..._fragmentParticles,
+          // 数字动画浮在碎片计数器右上角
+          _buildFragmentCounter(),
         ],
       ),
     );
@@ -435,16 +494,11 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   Widget _buildFragmentCounter() {
     return Padding(
       padding: const EdgeInsets.only(right: 8.0),
-      child: Center(
-        child: Container(
-          key: _fragmentCounterKey,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.blueGrey.shade700),
-          ),
-          child: Row(
+      child: Stack(
+        key: _fragmentCounterKey,
+        alignment: Alignment.center,
+        children: [
+          Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow.shade700, size: 18),
@@ -455,7 +509,30 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
               ),
             ],
           ),
-        ),
+          if (_showingFragmentGain)
+            Padding(
+              padding: const EdgeInsets.only(top: 22),
+              child: AnimatedOpacity(
+                opacity: _showingFragmentGain ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 300),
+                child: Text(
+                  _fragmentGainText,
+                  style: TextStyle(
+                    color: Colors.green.shade400,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                    shadows: [
+                      Shadow(
+                        blurRadius: 2,
+                        color: Colors.black.withOpacity(0.8),
+                        offset: const Offset(1, 1),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -527,7 +604,13 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
                 _buildResetButton(),
               ],
             ),
-            _buildSpinButton(),
+            Column(
+              children: [
+                _buildSpinProgressBar(),
+                const SizedBox(height: 8),
+                _buildSpinButton(),
+              ],
+            ),
             Column(
               children: [
                 _buildCheatButton('随机2连', () => _cheatMatch(2)),
@@ -559,6 +642,46 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     );
   }
 
+  Widget _buildSpinProgressBar() {
+    final progress = _remainingSpins / 100.0;
+    return Container(
+      width: 90,
+      height: 16,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.blue.shade300, width: 1),
+        color: Colors.black.withOpacity(0.3),
+      ),
+      child: Stack(
+        children: [
+          Container(
+            width: 90 * progress,
+            height: 16,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(7),
+              gradient: LinearGradient(
+                colors: progress > 0.3 ? [Colors.blue.shade600, Colors.blue.shade400] : [Colors.red.shade600, Colors.red.shade400],
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ),
+            ),
+          ),
+          Center(
+            child: Text(
+              '$_remainingSpins',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                shadows: [Shadow(blurRadius: 2, color: Colors.black)],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSpinButton() {
     return GestureDetector(
       onTapDown: (_) => setState(() => _isButtonPressed = true),
@@ -572,51 +695,51 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
         duration: const Duration(milliseconds: 100),
         child: Opacity(
           opacity: _reelKeys.any((key) => key.currentState?.isSpinning ?? false) ? 0.6 : 1.0,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: 90,
-                height: 90,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFF003688),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.white.withOpacity(0.5),
-                      blurRadius: 15,
-                      spreadRadius: 2,
-                    )
-                  ],
+          child: Container(
+            width: 90,
+            height: 65, // 降低高度
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF003688), Color(0xFF005EB8)],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.4),
+                  blurRadius: 8,
+                  offset: const Offset(0, 4),
                 ),
-              ),
-              Container(
-                width: 80,
-                height: 80,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [Color(0xFF003688), Color(0xFF005EB8)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
+                BoxShadow(
+                  color: Colors.white.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, -2),
                 ),
+              ],
+              border: Border.all(
+                color: Colors.white.withOpacity(0.3),
+                width: 1,
               ),
-              Container(
-                height: 35,
-                width: 90,
-                color: const Color(0xFFD42A2F),
-              ),
-              const Text(
+            ),
+            child: Center(
+              child: Text(
                 '开始',
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 28,
+                  fontSize: 20, // 稍微减小字体
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 4,
+                  letterSpacing: 2,
+                  shadows: [
+                    Shadow(
+                      blurRadius: 2,
+                      color: Colors.black.withOpacity(0.8),
+                      offset: const Offset(1, 1),
+                    ),
+                  ],
                 ),
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -636,7 +759,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
           context: context,
           title: '重置进度?',
           content: const Text(
-            '将清除当前主题的所有卡牌和碎片进度，确定吗?',
+            '将清除当前主题的所有卡牌和碎片进度，并重置转动次数到100次，确定吗?',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.white, fontSize: 16),
           ),
@@ -924,11 +1047,11 @@ class SlotReelState extends State<SlotReel> with SingleTickerProviderStateMixin 
     return _shuffledPool[targetPoolIndex];
   }
 
-  Future<CollectionCard> spinTo(String cardName) async {
+  Future<CollectionCard> spinTo(String itemName) async {
     if (isSpinning) return activeCard;
     if (mounted) setState(() => isSpinning = true);
 
-    final int targetPoolIndex = _shuffledPool.indexWhere((c) => c.name == cardName);
+    final int targetPoolIndex = _shuffledPool.indexWhere((item) => item.name == itemName);
     if (targetPoolIndex == -1) {
       return spin();
     }
@@ -991,7 +1114,9 @@ class SlotReelState extends State<SlotReel> with SingleTickerProviderStateMixin 
                       child: Padding(
                         padding: const EdgeInsets.all(4.0),
                         child: Image.asset(
-                          'assets/cards/${widget.themeAssetPath}/${card.imagePath}',
+                          card.isProp 
+                            ? 'assets/slot_item/${card.imagePath}'
+                            : 'assets/cards/${widget.themeAssetPath}/${card.imagePath}',
                           fit: BoxFit.contain,
                         ),
                       ),
@@ -1027,12 +1152,14 @@ class SlotReelState extends State<SlotReel> with SingleTickerProviderStateMixin 
 class _FragmentParticle extends StatefulWidget {
   final Offset startPosition;
   final Offset endPosition;
+  final int count;
   final void Function(Key) onCompleted;
 
   const _FragmentParticle({
     required Key key,
     required this.startPosition,
     required this.endPosition,
+    required this.count,
     required this.onCompleted,
   }) : super(key: key);
 
@@ -1043,7 +1170,7 @@ class _FragmentParticle extends StatefulWidget {
 class _FragmentParticleState extends State<_FragmentParticle> with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
-  late Offset _controlPoint;
+  late List<Offset> _controlPoints;
 
   @override
   void initState() {
@@ -1058,12 +1185,13 @@ class _FragmentParticleState extends State<_FragmentParticle> with SingleTickerP
     });
 
     final random = Random();
-    final controlX = lerpDouble(widget.startPosition.dx, widget.endPosition.dx, 0.5)! + (random.nextDouble() - 0.5) * 200;
-    final controlY = lerpDouble(widget.startPosition.dy, widget.endPosition.dy, 0.2)! - random.nextDouble() * 150;
-    _controlPoint = Offset(controlX, controlY);
+    _controlPoints = List.generate(widget.count, (i) {
+      final controlX = lerpDouble(widget.startPosition.dx, widget.endPosition.dx, 0.5)! + (random.nextDouble() - 0.5) * 200;
+      final controlY = lerpDouble(widget.startPosition.dy, widget.endPosition.dy, 0.2)! - random.nextDouble() * 150;
+      return Offset(controlX, controlY);
+    });
 
     _animation = CurvedAnimation(parent: _controller, curve: Curves.easeOut);
-    
     _controller.forward();
   }
   
@@ -1080,16 +1208,19 @@ class _FragmentParticleState extends State<_FragmentParticle> with SingleTickerP
       builder: (context, child) {
         if (_controller.isAnimating) {
           final t = _animation.value;
-          final p0 = widget.startPosition;
-          final p1 = _controlPoint;
-          final p2 = widget.endPosition;
-          final x = pow(1 - t, 2) * p0.dx + 2 * (1 - t) * t * p1.dx + pow(t, 2) * p2.dx;
-          final y = pow(1 - t, 2) * p0.dy + 2 * (1 - t) * t * p1.dy + pow(t, 2) * p2.dy;
-
-          return Positioned(
-            left: x,
-            top: y,
-            child: Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow.shade700, size: 20),
+          return Stack(
+            children: List.generate(widget.count, (i) {
+              final p0 = widget.startPosition;
+              final p1 = _controlPoints[i];
+              final p2 = widget.endPosition;
+              final x = pow(1 - t, 2) * p0.dx + 2 * (1 - t) * t * p1.dx + pow(t, 2) * p2.dx;
+              final y = pow(1 - t, 2) * p0.dy + 2 * (1 - t) * t * p1.dy + pow(t, 2) * p2.dy;
+              return Positioned(
+                left: x,
+                top: y,
+                child: Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow.shade700, size: 20),
+              );
+            }),
           );
         } else {
           return const SizedBox.shrink();

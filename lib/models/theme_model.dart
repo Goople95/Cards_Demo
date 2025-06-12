@@ -1,9 +1,33 @@
-import 'collection_model.dart';
+// 扩展的收集卡牌类，支持道具
+class CollectionCard {
+  final String name;
+  final String imagePath;
+  final bool isProp; // 新增：是否为道具
+  int progress; // 0 to 4，道具不使用此字段
+
+  bool get isCollected => !isProp && progress >= 4;
+
+  CollectionCard({
+    required this.name,
+    required this.imagePath,
+    this.progress = 0,
+    this.isProp = false, // 默认为卡牌
+  });
+
+  CollectionCard clone() {
+    return CollectionCard(
+      name: name,
+      imagePath: imagePath,
+      progress: progress,
+      isProp: isProp,
+    );
+  }
+}
 
 class ThemeModel {
   final String name;
   final String assetPath;
-  final List<CollectionCard> cards;
+  final List<CollectionCard> cards; // 包含卡牌和道具
 
   ThemeModel({
     required this.name,
@@ -11,6 +35,16 @@ class ThemeModel {
     required this.cards,
   });
 }
+
+// 道具中文名称映射
+final Map<String, String> propChineseNames = {
+  'Crystal Dice.png': '水晶骰子',
+};
+
+// 道具描述信息
+final Map<String, String> propDescriptions = {
+  'Crystal Dice.png': '神秘的水晶骰子，蕴含着古老的魔法力量。当它在老虎机中连续出现时，会为你增加宝贵的转动次数。2连可获得25次转动，3连可获得100次转动！',
+};
 
 // 卡牌中文名称映射
 final Map<String, String> cardChineseNames = {
@@ -77,21 +111,40 @@ String _nameFromPath(String path) {
       .join(' ');
 }
 
+String _propNameFromPath(String path) {
+  return propChineseNames[path] ?? path
+      .split('.')[0] // remove .png
+      .replaceAll('_', ' ') // replace underscores
+      .split(' ')
+      .map((word) => word[0].toUpperCase() + word.substring(1))
+      .join(' ');
+}
+
 final Map<String, ThemeModel> themes = {
   'uk': ThemeModel(
     name: 'UK Collection',
     assetPath: 'UK', // Case-sensitive to match directory
     cards: [
-      'afternoon_tea.png', 'bagpiper.png', 'bookstore.png', 'double_decker.png',
-      'epl_ticket.png', 'london_eye.png', 'newsboy.png', 'red_guard.png', 'royal_musician.png'
-    ].map((file) => CollectionCard(name: _nameFromPath(file), imagePath: file)).toList(),
+      // 普通卡牌
+      ...['afternoon_tea.png', 'bagpiper.png', 'bookstore.png', 'double_decker.png',
+          'epl_ticket.png', 'london_eye.png', 'newsboy.png', 'red_guard.png', 'royal_musician.png']
+        .map((file) => CollectionCard(name: _nameFromPath(file), imagePath: file)),
+      // 道具
+      ...['Crystal Dice.png']
+        .map((file) => CollectionCard(name: _propNameFromPath(file), imagePath: file, isProp: true)),
+    ],
   ),
   'japan': ThemeModel(
     name: 'Japan Collection',
     assetPath: 'Japan', // Case-sensitive to match directory
     cards: [
-      'japanese_garden.png', 'japanese_maiko.png', 'japanese_summer_festival.png', 'japanese_tea_ceremony.png',
-      'japan_cherry_blossom_samurai.png', 'kabuki_performance.png', 'kinkaku.png', 'mt_fuji_village.png', 'sumo_wrestler.png'
-    ].map((file) => CollectionCard(name: _nameFromPath(file), imagePath: file)).toList(),
+      // 普通卡牌
+      ...['japanese_garden.png', 'japanese_maiko.png', 'japanese_summer_festival.png', 'japanese_tea_ceremony.png',
+          'japan_cherry_blossom_samurai.png', 'kabuki_performance.png', 'kinkaku.png', 'mt_fuji_village.png', 'sumo_wrestler.png']
+        .map((file) => CollectionCard(name: _nameFromPath(file), imagePath: file)),
+      // 道具
+      ...['Crystal Dice.png']
+        .map((file) => CollectionCard(name: _propNameFromPath(file), imagePath: file, isProp: true)),
+    ],
   ),
 }; 
