@@ -25,7 +25,7 @@ class SlotReel extends StatefulWidget {
   State<SlotReel> createState() => _SlotReelState();
 }
 
-class _SlotReelState extends State<SlotReel> {
+class _SlotReelState extends State<SlotReel> with AutomaticKeepAliveClientMixin {
   late FixedExtentScrollController _ctrl;
 
   @override
@@ -97,6 +97,7 @@ class _SlotReelState extends State<SlotReel> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // 保活机制需要
     return SizedBox(
       height: 150,
       width: 100,
@@ -137,4 +138,7 @@ class _SlotReelState extends State<SlotReel> {
       ),
     );
   }
+
+  @override
+  bool get wantKeepAlive => true;
 }

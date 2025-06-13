@@ -1,21 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:confetti/confetti.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'dart:math';
 
 // 社交挑战页面，支持10道题随机答题，答对500答错200
 class SocialPage extends StatefulWidget {
+  final String? friendName;
+  final bool isRevenge;
+
+  const SocialPage({
+    super.key,
+    this.friendName,
+    this.isRevenge = false,
+  });
+
   @override
   State<SocialPage> createState() => _SocialPageState();
 }
 
 class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
+  late String _friendName;
   bool _answered = false;
   bool _isCorrect = false;
   int _fragmentsStolen = 0;
   late Map<String, dynamic> _currentQuiz;
-  late String _friendName;
   late ConfettiController _confettiController;
   late AudioPlayer _audioPlayer;
+  final Random _random = Random();
 
   final List<String> _funnyNames = [
     '王铁蛋', '李狗剩', '赵美丽', '钱多多', '孙悟饭',
@@ -43,6 +54,23 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
 
   bool _showingCustomDialog = false;
 
+  @override
+  void initState() {
+    super.initState();
+    _friendName = widget.friendName ?? _generateRandomName();
+    _currentQuiz = (_quizList..shuffle()).first;
+    _confettiController = ConfettiController(duration: const Duration(seconds: 2));
+    _audioPlayer = AudioPlayer();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showQuizDialog();
+    });
+  }
+
+  String _generateRandomName() {
+    final names = ['小明', '小红', '小刚', '小李', '小张', '小王', '小赵', '小钱', '小孙', '小周'];
+    return names[_random.nextInt(names.length)];
+  }
+
   void _handleQuizAnswer(bool answer) {
     bool correct = (answer == _currentQuiz['a']);
     setState(() {
@@ -64,18 +92,6 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
       );
     }
     Navigator.of(context).pop(_fragmentsStolen);
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _currentQuiz = (_quizList..shuffle()).first;
-    _friendName = (_funnyNames..shuffle()).first;
-    _confettiController = ConfettiController(duration: const Duration(seconds: 2));
-    _audioPlayer = AudioPlayer();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _showQuizDialog();
-    });
   }
 
   @override
@@ -109,7 +125,7 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 8),
-                Text('（好友昵称随机生成）', 
+                Text(widget.isRevenge ? '（复仇之战）' : '（好友昵称随机生成）', 
                   style: TextStyle(color: Colors.white70, fontSize: 14),
                   textAlign: TextAlign.center,
                 ),

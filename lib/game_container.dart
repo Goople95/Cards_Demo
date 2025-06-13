@@ -11,6 +11,6 @@ class GameContainer extends StatefulWidget {
 class _GameContainerState extends State<GameContainer> {
   @override
   Widget build(BuildContext context) {
-    return const SlotGamePage();
+    return const SlotGame();
   }
 } 

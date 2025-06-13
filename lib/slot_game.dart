@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:confetti/confetti.dart';
@@ -10,14 +11,14 @@ import 'models/theme_model.dart';
 import 'house_page.dart';
 import 'social_page.dart';
 
-class SlotGamePage extends StatefulWidget {
-  const SlotGamePage({super.key});
+class SlotGame extends StatefulWidget {
+  const SlotGame({super.key});
 
   @override
-  State<SlotGamePage> createState() => _SlotGamePageState();
+  State<SlotGame> createState() => _SlotGameState();
 }
 
-class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMixin {
+class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
   // region State Variables
   late AudioPlayer _audioPlayer;
   late ConfettiController _confettiController;
@@ -42,11 +43,17 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   Offset? _fragmentGainOffset;
 
   bool _crystalDiceEffectVisible = false;
+  bool _showHintOverlay = false;
+  bool _hintHasShownOnce = false;
+  Timer? _hintTimer;
+  Timer? _hintDisplayTimer;
   late AnimationController _hintAnimController;
 
-  // 自动浮层提示相关
-  bool _showHintOverlay = false;
-  Timer? _hintTimer;
+  final PageController _pageController = PageController();
+  bool _isSlotMachineVisible = true;
+
+  late List<List<CollectionCard>> _reelCardPools;
+  late List<int> _reelIndices;
 
   @override
   void initState() {
@@ -54,37 +61,34 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     _audioPlayer = AudioPlayer();
     _confettiController = ConfettiController(duration: const Duration(seconds: 2));
     _currentTheme = themes['uk']!;
+    _reelKeys = List.generate(3, (index) => GlobalKey<SlotReelState>());
+    _reelCardPools = List.generate(3, (_) {
+      final pool = _currentTheme.cards.map((item) => item.clone()).toList();
+      pool.shuffle();
+      return pool;
+    });
+    _reelIndices = List.filled(3, 0);
+    _reels = List.generate(3, (index) => SlotReel(
+      key: _reelKeys[index],
+      cardPool: _reelCardPools[index],
+      selectedIndex: _reelIndices[index],
+      themeAssetPath: _currentTheme.assetPath,
+    ));
     _initializeGame();
     _hintAnimController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1600),
     );
-    _startHintTimer();
+    _startHintMonitor();
+    _pageController.addListener(() {});
   }
 
   void _initializeGame() {
-    // 清理旧的动画控制器
     _animationControllers.values.forEach((controller) => controller.dispose());
     _animationControllers.clear();
     _animations.clear();
-    
-    // 重新初始化集合和转轮（只包含卡牌，不包含道具）
     _collection = _currentTheme.cards.where((c) => !c.isProp).map((e) => e.clone()).toList();
-    
-    // 创建新的GlobalKey列表，确保每个key都是唯一的
-    _reelKeys = List.generate(3, (index) => GlobalKey<SlotReelState>(debugLabel: 'reel_$index'));
-    
-    // 老虎机使用所有物品（包括道具）
-    _reels = List.generate(3, (index) => SlotReel(
-      key: _reelKeys[index],
-      cardPool: _currentTheme.cards.map((item) => item.clone()).toList(),
-      themeAssetPath: _currentTheme.assetPath,
-    ));
-    
-    // 为新的卡牌设置动画
     _collection.forEach(_setupAnimations);
-    
-    // 加载状态
     _loadState();
   }
 
@@ -101,7 +105,18 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     );
   }
 
-  Future<void> _loadState() async {
+  void _updateReels() {
+    setState(() {
+      _reels = List.generate(3, (index) => SlotReel(
+        key: _reelKeys[index],
+        cardPool: _reelCardPools[index],
+        selectedIndex: _reelIndices[index],
+        themeAssetPath: _currentTheme.assetPath,
+      ));
+    });
+  }
+
+  void _loadState() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _spinCount = prefs.getInt('spinCount_${_currentTheme.name}') ?? 0;
@@ -165,21 +180,31 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     );
   }
 
-  void _startHintTimer() {
+  void _startHintMonitor() {
     _hintTimer?.cancel();
-    setState(() => _showHintOverlay = false);
+    _hintDisplayTimer?.cancel();
     _hintTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) {
         setState(() => _showHintOverlay = true);
         _hintAnimController.repeat(reverse: true);
+        _hintDisplayTimer = Timer(const Duration(seconds: 3), () {
+          if (mounted) {
+            setState(() {
+              _showHintOverlay = false;
+              _hintHasShownOnce = true;
+            });
+            _hintAnimController.stop();
+            _startHintMonitor(); // 继续监测，循环
+          }
+        });
       }
     });
   }
 
   void _onUserInteraction() {
-    if (_showHintOverlay) setState(() => _showHintOverlay = false);
+    setState(() => _showHintOverlay = false);
     _hintAnimController.stop();
-    _startHintTimer();
+    _startHintMonitor();
   }
 
   @override
@@ -188,7 +213,9 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     _confettiController.dispose();
     _animationControllers.values.forEach((controller) => controller.dispose());
     _hintTimer?.cancel();
+    _hintDisplayTimer?.cancel();
     _hintAnimController.dispose();
+    _pageController.dispose();
     super.dispose();
   }
 
@@ -200,7 +227,6 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
       );
       return;
     }
-
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     _playSpinStartSound();
     setState(() => _isButtonPressed = true);
@@ -211,15 +237,16 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     });
 
     try {
-      final futures = _reelKeys.map((key) => key.currentState!.spin());
-      final List<CollectionCard> finalResults = await Future.wait(futures);
-
+      // 让每个转轮都执行 spin 动画
+      List<Future<CollectionCard>> futures = _reelKeys.map((key) => key.currentState!.spin()).toList();
+      final results = await Future.wait(futures);
+      
       if (mounted) {
         setState(() {
           _spinCount++;
           _remainingSpins--;
         });
-        _checkResult(finalResults);
+        _checkResult(results);
         _saveState();
       }
     } catch (e) {
@@ -235,13 +262,19 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
       for (var card in _collection) {
         card.progress = 0;
       }
+      _reelCardPools = List.generate(3, (_) {
+        final pool = _currentTheme.cards.map((item) => item.clone()).toList();
+        pool.shuffle();
+        return pool;
+      });
+      _reelIndices = List.filled(3, 0);
+      _updateReels();
     });
-    // 清除房产等级和碎片
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('house_level_${_currentTheme.name}', 1);
+    await prefs.setInt('houseLevel_uk', 1);
     await prefs.setInt('fragmentCount', 0);
+    _initializeGame();
     _saveState();
-    // 弹窗提示
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('已重置所有进度，房产等级和碎片也已清零！')),
     );
@@ -359,11 +392,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   void _triggerFragmentAnimationOverlay(String sourceCardName, int count, {VoidCallback? onComplete, bool showGainText = true}) {
     final startKey = _slotMachineKey;
     final endKey = _fragmentCounterKey;
-    debugPrint('触发碎片特效: sourceCardName=$sourceCardName, count=$count');
-    debugPrint('startKey.currentContext: [33m[1m${startKey.currentContext}[0m');
-    debugPrint('endKey.currentContext: [33m[1m${endKey.currentContext}[0m');
     if (startKey.currentContext == null || endKey.currentContext == null) {
-      debugPrint('碎片特效未触发：startKey或endKey的context为null');
       if (onComplete != null) onComplete();
       return;
     }
@@ -377,8 +406,6 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     final endGlobalCenter = endRenderBox.localToGlobal(
       Offset(endRenderBox.size.width / 2, endRenderBox.size.height / 2),
     );
-
-    debugPrint('startGlobalCenter: $startGlobalCenter, endGlobalCenter: $endGlobalCenter');
 
     final overlay = Overlay.of(context);
     late OverlayEntry entry;
@@ -416,7 +443,6 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     final globalPosition = box.localToGlobal(
       Offset(box.size.width / 2, box.size.height / 2 - 100)
     );
-    debugPrint('计数器全局位置: $globalPosition');
 
     // 获取Stack的RenderBox
     final RenderBox? stackBox = context.findAncestorRenderObjectOfType<RenderBox>();
@@ -427,7 +453,6 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
 
     // 将全局坐标转换为Stack中的局部坐标
     final localPosition = stackBox.globalToLocal(globalPosition);
-    debugPrint('Stack局部坐标: $localPosition');
 
     setState(() {
       _fragmentGainText = '+$count';
@@ -447,12 +472,16 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
 
   void _changeTheme(String themeKey) {
     if (themes.containsKey(themeKey) && themes[themeKey]!.name != _currentTheme.name) {
-      // 先清除当前状态
       setState(() {
         _currentTheme = themes[themeKey]!;
+        _reelCardPools = List.generate(3, (_) {
+          final pool = _currentTheme.cards.map((item) => item.clone()).toList();
+          pool.shuffle();
+          return pool;
+        });
+        _reelIndices = List.filled(3, 0);
+        _updateReels();
       });
-      
-      // 异步重新初始化游戏，确保UI更新后再进行
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _initializeGame();
       });
@@ -531,151 +560,97 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   // region UI Building
   @override
   Widget build(BuildContext context) {
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification is ScrollStartNotification) {
-          debugPrint('GridView滑动开始 - 位置: ${notification.metrics.pixels}');
-          _onUserInteraction();
-        } else if (notification is ScrollUpdateNotification) {
-          debugPrint('GridView滑动中 - 位置: ${notification.metrics.pixels}, 增量: ${notification.scrollDelta}');
-        } else if (notification is ScrollEndNotification) {
-          debugPrint('GridView滑动结束 - 位置: ${notification.metrics.pixels}');
-          // 如果是向上滑动
-          if (notification.metrics.pixels > notification.metrics.minScrollExtent) {
-            debugPrint('向上滑动结束，显示老虎机');
-            if (mounted) {
-              setState(() {
-                // 这里可以添加任何需要的状态更新
-              });
-            }
-          }
-        }
-        return false;
-      },
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: _onUserInteraction,
-        onPanDown: (_) => _onUserInteraction(),
-        child: Scaffold(
-          backgroundColor: Colors.black,
-          appBar: _buildAppBar(),
-          body: Stack(
-            children: [
-              // 主要内容
-              Column(
-                children: [
-                  Expanded(
-                    child: _buildSlotMachine(),
-                  ),
-                ],
-              ),
-              // 碎片获得动画
-              if (_showingFragmentGain && _fragmentGainOffset != null)
-                Positioned(
-                  left: _fragmentGainOffset!.dx,
-                  top: _fragmentGainOffset!.dy,
-                  child: TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    duration: const Duration(milliseconds: 1000),
-                    builder: (context, value, child) {
-                      return Transform.translate(
-                        offset: Offset(0, -50 * value),
-                        child: Opacity(
-                          opacity: 1 - value,
-                          child: Text(
-                            _fragmentGainText,
-                            style: TextStyle(
-                              color: Colors.yellow.shade400,
-                              fontSize: 24,
-                              fontWeight: FontWeight.w900,
-                              shadows: [
-                                Shadow(
-                                  blurRadius: 2,
-                                  color: Colors.black.withOpacity(0.8),
-                                  offset: const Offset(1, 1),
-                                ),
-                              ],
+    super.build(context); // 保活机制需要
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: _onUserInteraction,
+      onPanDown: (_) => _onUserInteraction(),
+      child: Stack(
+        children: [
+          Scaffold(
+            backgroundColor: Colors.black,
+            appBar: _buildAppBar(),
+            body: PageView(
+              controller: _pageController,
+              scrollDirection: Axis.vertical,
+              physics: const AlwaysScrollableScrollPhysics(),
+              pageSnapping: true,
+              dragStartBehavior: DragStartBehavior.down,
+              onPageChanged: _onPageChanged,
+              children: [
+                // 老虎机页面（包含收藏区）
+                Stack(
+                  children: [
+                    // 主要内容
+                    Column(
+                      children: [
+                        Expanded(
+                          child: _buildSlotMachineContent(),
+                        ),
+                      ],
+                    ),
+                    // 其他子组件
+                    if (_isSlotMachineVisible) ...[
+                      _buildSlotMachineOverlay(),
+                    ],
+                  ],
+                ),
+                // 我的房子页面
+                const HousePage(),
+              ],
+            ),
+          ),
+          // 滚动提示浮层（底部居中）
+          if (_showHintOverlay && _isSlotMachineVisible)
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 48),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedBuilder(
+                      animation: _hintAnimController,
+                      builder: (context, child) {
+                        final double offsetY = 8 * (1 - _hintAnimController.value); // 上下浮动
+                        final double opacity = 0.5 + 0.5 * _hintAnimController.value; // 透明度渐变
+                        return Opacity(
+                          opacity: opacity,
+                          child: Transform.translate(
+                            offset: Offset(0, offsetY),
+                            child: Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.35),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Center(
+                                child: Icon(Icons.arrow_upward, color: Colors.white, size: 28),
+                              ),
                             ),
                           ),
+                        );
+                      },
+                    ),
+                    if (!_hintHasShownOnce) const SizedBox(height: 8),
+                    if (!_hintHasShownOnce)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.65),
+                          borderRadius: BorderRadius.circular(18),
                         ),
-                      );
-                    },
-                    onEnd: () {
-                      setState(() {
-                        _fragmentGainOffset = null;
-                      });
-                    },
-                  ),
-                ),
-              ),
-              // 自动浮层提示
-              if (_showHintOverlay)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 80),
-                        child: AnimatedBuilder(
-                          animation: _hintAnimController,
-                          builder: (context, child) {
-                            final t = _hintAnimController.value;
-                            final scale = 1.0 + 0.2 * sin(t * pi);
-                            final opacity = 0.3 + 0.7 * sin(t * pi);
-                            
-                            return Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Transform.scale(
-                                  scale: scale,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.15),
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: Colors.white.withOpacity(0.3),
-                                        width: 1,
-                                      ),
-                                    ),
-                                    child: Icon(
-                                      Icons.keyboard_arrow_up_rounded,
-                                      color: Colors.white.withOpacity(opacity),
-                                      size: 32,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 18),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black.withOpacity(0.6),
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(
-                                      color: Colors.white.withOpacity(0.3),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: const Text(
-                                    '上滑查看我的房子',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
+                        child: const Text(
+                          '上滑进入我的房子',
+                          style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                         ),
                       ),
-                    ),
-                  ),
+                  ],
                 ),
-            ],
-          ),
-        ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -729,7 +704,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     );
   }
 
-  Widget _buildSlotMachine() {
+  Widget _buildSlotMachineContent() {
     return Stack(
       alignment: Alignment.topCenter,
       children: [
@@ -774,16 +749,47 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     );
   }
 
-  Widget _buildTopBar() {
-    return AppBar(
-      title: Text(
-        themeChineseNames[_currentTheme.name] ?? _currentTheme.name,
-        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-      ),
-      backgroundColor: Colors.black.withOpacity(0.3),
-      elevation: 0,
-      actions: [
-        _buildThemeSwitcher(), // 只保留主题切换按钮
+  Widget _buildSlotMachineOverlay() {
+    return Stack(
+      children: [
+        // 碎片获得动画
+        if (_showingFragmentGain && _fragmentGainOffset != null)
+          Positioned(
+            left: _fragmentGainOffset!.dx,
+            top: _fragmentGainOffset!.dy,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0.0, end: 1.0),
+              duration: const Duration(milliseconds: 1000),
+              builder: (context, value, child) {
+                return Transform.translate(
+                  offset: Offset(0, -50 * value),
+                  child: Opacity(
+                    opacity: 1 - value,
+                    child: Text(
+                      _fragmentGainText,
+                      style: TextStyle(
+                        color: Colors.yellow.shade400,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w900,
+                        shadows: [
+                          Shadow(
+                            blurRadius: 2,
+                            color: Colors.black.withOpacity(0.8),
+                            offset: const Offset(1, 1),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+              onEnd: () {
+                setState(() {
+                  _fragmentGainOffset = null;
+                });
+              },
+            ),
+          ),
       ],
     );
   }
@@ -973,25 +979,23 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   }
 
   Widget _buildCollectionGrid() {
-    debugPrint('构建收藏网格 - 卡片数量: ${_collection.length}');
     return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      physics: const NeverScrollableScrollPhysics(),  // 禁用GridView的滚动
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
+        childAspectRatio: 1.0,
         crossAxisSpacing: 8,
         mainAxisSpacing: 8,
-        childAspectRatio: 1.0,
       ),
       itemCount: _collection.length,
       itemBuilder: (context, index) {
-        debugPrint('构建卡片 $index');
-        final card = _collection[index];
-        return _buildCard(card);
+        return _buildCollectionCard(_collection[index]);
       },
     );
   }
 
-  Widget _buildCard(CollectionCard card) {
+  Widget _buildCollectionCard(CollectionCard card) {
     final animation = _animations[card.name]!;
     final color = card.isCollected ? Colors.transparent : Colors.black.withOpacity(0.6);
     final borderColor = card.isCollected ? Colors.amber.shade600 : Colors.grey.shade700;
@@ -1211,7 +1215,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
           child: Row(
             key: _slotMachineKey,
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: List.generate(3, (i) => _reels[i]),
+            children: _reels,
           ),
         ),
       ),
@@ -1226,6 +1230,15 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     );
   }
 
+  @override
+  bool get wantKeepAlive => true;
+
+  void _onPageChanged(int index) {
+    setState(() {
+      _isSlotMachineVisible = index == 0;
+    });
+  }
+
   // endregion
 }
 
@@ -1233,13 +1246,13 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
 class SlotReel extends StatefulWidget {
   final List<CollectionCard> cardPool;
   final String themeAssetPath;
-  final int spinDuration;
+  final int selectedIndex;
 
   const SlotReel({
     Key? key,
     required this.cardPool,
     required this.themeAssetPath,
-    this.spinDuration = 400,
+    required this.selectedIndex,
   }) : super(key: key);
 
   @override
@@ -1289,7 +1302,7 @@ class SlotReelState extends State<SlotReel> with SingleTickerProviderStateMixin 
     
     await _scrollController.animateToItem(
       targetControllerIndex,
-      duration: Duration(milliseconds: widget.spinDuration + random.nextInt(400)),
+      duration: Duration(milliseconds: 400 + random.nextInt(400)),
       curve: Curves.decelerate,
     );
     
