@@ -36,12 +36,17 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   final Map<String, AnimationController> _animationControllers = {};
   final Map<String, Animation<double>> _animations = {};
 
-  final GlobalKey _slotMachineKey = GlobalKey();
-  final GlobalKey _fragmentCounterKey = GlobalKey();
+  final GlobalKey _slotMachineKey = GlobalKey(debugLabel: 'slotMachine');
+  final GlobalKey _fragmentCounterKey = GlobalKey(debugLabel: 'fragmentCounter');
+  final GlobalKey _spinProgressKey = GlobalKey(debugLabel: 'spinProgress');
   Offset? _fragmentGainOffset;
 
   bool _crystalDiceEffectVisible = false;
-  final GlobalKey _spinProgressKey = GlobalKey();
+  late AnimationController _hintAnimController;
+
+  // 自动浮层提示相关
+  bool _showHintOverlay = false;
+  Timer? _hintTimer;
 
   @override
   void initState() {
@@ -50,6 +55,11 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     _confettiController = ConfettiController(duration: const Duration(seconds: 2));
     _currentTheme = themes['uk']!;
     _initializeGame();
+    _hintAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    );
+    _startHintTimer();
   }
 
   void _initializeGame() {
@@ -61,8 +71,8 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     // 重新初始化集合和转轮（只包含卡牌，不包含道具）
     _collection = _currentTheme.cards.where((c) => !c.isProp).map((e) => e.clone()).toList();
     
-    // 创建新的GlobalKey列表
-    _reelKeys = List.generate(3, (index) => GlobalKey<SlotReelState>());
+    // 创建新的GlobalKey列表，确保每个key都是唯一的
+    _reelKeys = List.generate(3, (index) => GlobalKey<SlotReelState>(debugLabel: 'reel_$index'));
     
     // 老虎机使用所有物品（包括道具）
     _reels = List.generate(3, (index) => SlotReel(
@@ -155,11 +165,30 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     );
   }
 
+  void _startHintTimer() {
+    _hintTimer?.cancel();
+    setState(() => _showHintOverlay = false);
+    _hintTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() => _showHintOverlay = true);
+        _hintAnimController.repeat(reverse: true);
+      }
+    });
+  }
+
+  void _onUserInteraction() {
+    if (_showHintOverlay) setState(() => _showHintOverlay = false);
+    _hintAnimController.stop();
+    _startHintTimer();
+  }
+
   @override
   void dispose() {
     _audioPlayer.dispose();
     _confettiController.dispose();
     _animationControllers.values.forEach((controller) => controller.dispose());
+    _hintTimer?.cancel();
+    _hintAnimController.dispose();
     super.dispose();
   }
 
@@ -378,11 +407,32 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
 
   void _showFragmentGain(int count, {VoidCallback? onComplete}) {
     final RenderBox? box = _fragmentCounterKey.currentContext?.findRenderObject() as RenderBox?;
-    final Offset? global = box?.localToGlobal(Offset(box.size.width / 2, box.size.height / 2));
+    if (box == null) {
+      if (onComplete != null) onComplete();
+      return;
+    }
+    
+    // 获取计数器的全局位置，使用与碎片特效相同的偏移
+    final globalPosition = box.localToGlobal(
+      Offset(box.size.width / 2, box.size.height / 2 - 100)
+    );
+    debugPrint('计数器全局位置: $globalPosition');
+
+    // 获取Stack的RenderBox
+    final RenderBox? stackBox = context.findAncestorRenderObjectOfType<RenderBox>();
+    if (stackBox == null) {
+      if (onComplete != null) onComplete();
+      return;
+    }
+
+    // 将全局坐标转换为Stack中的局部坐标
+    final localPosition = stackBox.globalToLocal(globalPosition);
+    debugPrint('Stack局部坐标: $localPosition');
+
     setState(() {
       _fragmentGainText = '+$count';
       _showingFragmentGain = true;
-      _fragmentGainOffset = global;
+      _fragmentGainOffset = localPosition;
     });
 
     Future.delayed(const Duration(milliseconds: 500), () {
@@ -481,64 +531,150 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   // region UI Building
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque, // 允许手势穿透
-      onVerticalDragEnd: (details) {
-        if (details.primaryVelocity != null && details.primaryVelocity! < -20) { // 降低阈值
-          // 向上滑动，进入HousePage
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (context) => HousePage()),
-          );
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        if (notification is ScrollStartNotification) {
+          debugPrint('GridView滑动开始 - 位置: ${notification.metrics.pixels}');
+          _onUserInteraction();
+        } else if (notification is ScrollUpdateNotification) {
+          debugPrint('GridView滑动中 - 位置: ${notification.metrics.pixels}, 增量: ${notification.scrollDelta}');
+        } else if (notification is ScrollEndNotification) {
+          debugPrint('GridView滑动结束 - 位置: ${notification.metrics.pixels}');
+          // 如果是向上滑动
+          if (notification.metrics.pixels > notification.metrics.minScrollExtent) {
+            debugPrint('向上滑动结束，显示老虎机');
+            if (mounted) {
+              setState(() {
+                // 这里可以添加任何需要的状态更新
+              });
+            }
+          }
         }
+        return false;
       },
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        body: Stack(
-          children: [
-            // 主要内容
-            Column(
-              children: [
-                // 顶部状态栏
-                _buildTopBar(),
-                // 老虎机主体
-                Expanded(
-                  child: _buildSlotMachine(),
-                ),
-              ],
-            ),
-            // 碎片获得动画
-            if (_fragmentGainOffset != null)
-              Positioned(
-                left: _fragmentGainOffset!.dx,
-                top: _fragmentGainOffset!.dy,
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 0.0, end: 1.0),
-                  duration: const Duration(milliseconds: 1000),
-                  builder: (context, value, child) {
-                    return Transform.translate(
-                      offset: Offset(0, -50 * value),
-                      child: Opacity(
-                        opacity: 1 - value,
-                        child: Text(
-                          _fragmentGainText,
-                          style: const TextStyle(
-                            color: Colors.yellow,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: _onUserInteraction,
+        onPanDown: (_) => _onUserInteraction(),
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          appBar: _buildAppBar(),
+          body: Stack(
+            children: [
+              // 主要内容
+              Column(
+                children: [
+                  Expanded(
+                    child: _buildSlotMachine(),
+                  ),
+                ],
+              ),
+              // 碎片获得动画
+              if (_showingFragmentGain && _fragmentGainOffset != null)
+                Positioned(
+                  left: _fragmentGainOffset!.dx,
+                  top: _fragmentGainOffset!.dy,
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0.0, end: 1.0),
+                    duration: const Duration(milliseconds: 1000),
+                    builder: (context, value, child) {
+                      return Transform.translate(
+                        offset: Offset(0, -50 * value),
+                        child: Opacity(
+                          opacity: 1 - value,
+                          child: Text(
+                            _fragmentGainText,
+                            style: TextStyle(
+                              color: Colors.yellow.shade400,
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900,
+                              shadows: [
+                                Shadow(
+                                  blurRadius: 2,
+                                  color: Colors.black.withOpacity(0.8),
+                                  offset: const Offset(1, 1),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                    );
-                  },
-                  onEnd: () {
-                    setState(() {
-                      _fragmentGainOffset = null;
-                    });
-                  },
+                      );
+                    },
+                    onEnd: () {
+                      setState(() {
+                        _fragmentGainOffset = null;
+                      });
+                    },
+                  ),
                 ),
               ),
-            if (_crystalDiceEffectVisible) CrystalDiceEffect(targetKey: _spinProgressKey),
-          ],
+              // 自动浮层提示
+              if (_showHintOverlay)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 80),
+                        child: AnimatedBuilder(
+                          animation: _hintAnimController,
+                          builder: (context, child) {
+                            final t = _hintAnimController.value;
+                            final scale = 1.0 + 0.2 * sin(t * pi);
+                            final opacity = 0.3 + 0.7 * sin(t * pi);
+                            
+                            return Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Transform.scale(
+                                  scale: scale,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.15),
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: Colors.white.withOpacity(0.3),
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: Icon(
+                                      Icons.keyboard_arrow_up_rounded,
+                                      color: Colors.white.withOpacity(opacity),
+                                      size: 32,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 18),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.6),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.3),
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    '上滑查看我的房子',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -553,33 +689,26 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
       backgroundColor: Colors.black.withOpacity(0.3),
       elevation: 0,
       actions: [
-        _buildFragmentCounter(),
         _buildThemeSwitcher(),
       ],
     );
   }
 
-  Widget _buildFragmentCounter() {
-    return Padding(
-      padding: const EdgeInsets.only(right: 8.0),
-      child: SizedBox(
-        key: _fragmentCounterKey,
-        height: 32,
-        width: 80,
-        child: Center(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow.shade700, size: 18),
-              const SizedBox(width: 4),
-              Text(
-                '$_fragmentCount',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-              ),
-            ],
+  Widget _buildFragmentDisplay() {
+    return Container(
+      key: _fragmentCounterKey,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow.shade700, size: 18),
+          const SizedBox(width: 4),
+          Text(
+            '$_fragmentCount',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -607,12 +736,13 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16.0),
           child: Column(
+            mainAxisSize: MainAxisSize.max,
             children: <Widget>[
-              const SizedBox(height: 20),
+              const SizedBox(height: 8),
+              _buildFragmentDisplay(),
               _buildSlotMachineContainer(),
               _buildSpinProgressBar(),
               const SizedBox(height: 8),
-              // 旋转按钮单独一行居中
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -622,7 +752,6 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
                   ),
                 ],
               ),
-              // 5个宽按钮一排
               const SizedBox(height: 6),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -634,25 +763,13 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
                   _buildWideButton('社交作弊', _buildMiniCheatButton('社交作弊', () => _cheatProp('社交道具', 2), color: Colors.green.shade700)),
                 ],
               ),
-              // 卡牌网格自适应剩余空间
+              const SizedBox(height: 32),
               Expanded(
                 child: _buildCollectionGrid(),
               ),
             ],
           ),
         ),
-        ConfettiWidget(
-          confettiController: _confettiController,
-          blastDirectionality: BlastDirectionality.explosive,
-          shouldLoop: false,
-          emissionFrequency: 0.05,
-          numberOfParticles: 50,
-          gravity: 0.2,
-          maxBlastForce: 25,
-          minBlastForce: 10,
-        ),
-        // 数字动画浮在碎片计数器右上角
-        _buildFragmentCounter(),
       ],
     );
   }
@@ -856,23 +973,21 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   }
 
   Widget _buildCollectionGrid() {
-    return Padding(
+    debugPrint('构建收藏网格 - 卡片数量: ${_collection.length}');
+    return GridView.builder(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 6,
-          mainAxisSpacing: 6,
-          childAspectRatio: 0.7,
-        ),
-        itemCount: _collection.length,
-        itemBuilder: (context, index) {
-          final card = _collection[index];
-          return _buildCard(card);
-        },
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+        childAspectRatio: 1.0,
       ),
+      itemCount: _collection.length,
+      itemBuilder: (context, index) {
+        debugPrint('构建卡片 $index');
+        final card = _collection[index];
+        return _buildCard(card);
+      },
     );
   }
 
@@ -1584,3 +1699,65 @@ class _CrystalDiceEffectState extends State<CrystalDiceEffect> with SingleTicker
   }
 }
 // endregion 
+
+// 添加手势轨迹绘制类
+class SwipePathPainter extends CustomPainter {
+  final double progress;
+  final Color color;
+
+  SwipePathPainter({
+    required this.progress,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+
+    final path = Path();
+    final centerX = size.width / 2;
+    final startY = size.height * 0.8;
+    final endY = size.height * 0.2;
+
+    // 绘制主轨迹
+    path.moveTo(centerX, startY);
+    path.quadraticBezierTo(
+      centerX,
+      startY - (endY - startY) * 0.5,
+      centerX,
+      endY,
+    );
+
+    // 绘制动态光点
+    final dotPaint = Paint()
+      ..color = Colors.white.withOpacity(0.8)
+      ..style = PaintingStyle.fill;
+
+    // 修改光点动画逻辑：从下向上滑动后消失
+    if (progress < 0.5) { // 只在动画前半段显示光点
+      final dotY = startY - (startY - endY) * (progress * 2);
+      canvas.drawCircle(Offset(centerX, dotY), 4, dotPaint);
+    }
+
+    // 绘制轨迹
+    canvas.drawPath(path, paint);
+
+    // 绘制轨迹光晕效果
+    final glowPaint = Paint()
+      ..color = Colors.white.withOpacity(0.1)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 8.0
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+
+    canvas.drawPath(path, glowPaint);
+  }
+
+  @override
+  bool shouldRepaint(SwipePathPainter oldDelegate) {
+    return oldDelegate.progress != progress;
+  }
+} 
