@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'dart:ui';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'models/theme_model.dart';
+import 'package:confetti/confetti.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'dart:math';
 
 class HousePage extends StatefulWidget {
   const HousePage({super.key});
@@ -9,404 +12,217 @@ class HousePage extends StatefulWidget {
   State<HousePage> createState() => _HousePageState();
 }
 
-class _HousePageState extends State<HousePage> with TickerProviderStateMixin {
-  String _currentTheme = 'uk';
+class _HousePageState extends State<HousePage> {
+  int _fragments = 0;
   int _houseLevel = 1;
-  int _totalFragments = 0;
-  
-  // 房屋升级所需碎片数
-  final Map<int, int> _levelCosts = {
-    2: 50,
-    3: 150,
-    4: 300,
-    5: 500,
-  };
-  
-  // 房屋等级描述
-  final Map<int, String> _levelDescriptions = {
-    1: '简陋小屋',
-    2: '舒适农舍',
-    3: '精美别墅',
-    4: '豪华庄园',
-    5: '皇家宫殿',
-  };
+  final int _maxLevel = 6;
+  final ConfettiController _confettiController = ConfettiController(duration: const Duration(seconds: 1));
+  final AudioPlayer _audioPlayer = AudioPlayer();
 
   @override
   void initState() {
     super.initState();
-    _loadHouseState();
+    _loadState();
   }
 
-  Future<void> _loadHouseState() async {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _loadState();
+  }
+
+  Future<void> _loadState() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _houseLevel = prefs.getInt('house_level_$_currentTheme') ?? 1;
-      // 获取所有主题的碎片总数
-      _totalFragments = _calculateTotalFragments(prefs);
+      _fragments = prefs.getInt('fragmentCount') ?? 0;
+      _houseLevel = prefs.getInt('houseLevel_uk') ?? 1;
     });
+    print('HousePage _loadState: _fragments = $_fragments, _houseLevel = $_houseLevel');
   }
 
-  int _calculateTotalFragments(SharedPreferences prefs) {
-    int total = 0;
-    for (String themeKey in themes.keys) {
-      final themeName = themes[themeKey]!.name;
-      total += prefs.getInt('fragmentCount_$themeName') ?? 0;
-    }
-    return total;
-  }
-
-  Future<void> _saveHouseState() async {
+  Future<void> _saveState() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('house_level_$_currentTheme', _houseLevel);
+    await prefs.setInt('fragmentCount', _fragments);
+    await prefs.setInt('houseLevel_uk', _houseLevel);
   }
 
-  void _upgradeHouse() {
-    if (_houseLevel >= 5) return;
-    
-    final cost = _levelCosts[_houseLevel + 1] ?? 0;
-    if (_totalFragments >= cost) {
+  Future<void> _upgradeHouse() async {
+    int cost = 500 * _houseLevel;
+    if (_houseLevel < _maxLevel && _fragments >= cost) {
       setState(() {
         _houseLevel++;
-        _totalFragments -= cost;
+        _fragments -= cost;
       });
-      _saveHouseState();
-      _deductFragmentsFromThemes(cost);
-      
-      _showUpgradeSuccessDialog();
-    } else {
-      _showInsufficientFragmentsDialog(cost);
+      await _saveState();
+      _confettiController.play();
+      _playUpgradeSound();
     }
   }
 
-  Future<void> _deductFragmentsFromThemes(int totalCost) async {
-    final prefs = await SharedPreferences.getInstance();
-    int remaining = totalCost;
-    
-    // 按主题顺序扣除碎片
-    for (String themeKey in themes.keys) {
-      if (remaining <= 0) break;
-      
-      final themeName = themes[themeKey]!.name;
-      final fragments = prefs.getInt('fragmentCount_$themeName') ?? 0;
-      final deduct = fragments >= remaining ? remaining : fragments;
-      
-      await prefs.setInt('fragmentCount_$themeName', fragments - deduct);
-      remaining -= deduct;
-    }
-  }
-
-  void _showUpgradeSuccessDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('升级成功！', style: TextStyle(color: Colors.green)),
-        content: Text('恭喜！你的房屋已升级到 ${_levelDescriptions[_houseLevel]}'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('太棒了！'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showInsufficientFragmentsDialog(int cost) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('碎片不足', style: TextStyle(color: Colors.orange)),
-        content: Text('升级需要 $cost 个碎片，你目前有 $_totalFragments 个碎片'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('继续收集'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _getHouseImagePath() {
-    final themePrefix = _currentTheme.toUpperCase();
-    return 'assets/house/${themePrefix}_House.png';
+  Future<void> _playUpgradeSound() async {
+    await _audioPlayer.play(AssetSource('house_upgrade.mp3'));
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
-        children: [
-          // 背景房屋图片铺满整个屏幕
-          Image.asset(
-            _getHouseImagePath(),
-            fit: BoxFit.cover,
-            width: double.infinity,
-            height: double.infinity,
-            errorBuilder: (context, error, stackTrace) {
-              return Container(
-                width: double.infinity,
-                height: double.infinity,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      const Color(0xFF87CEEB), // 天空蓝
-                      const Color(0xFF98FB98), // 浅绿色
-                    ],
-                  ),
+    print('HousePage build! _fragments = $_fragments, _houseLevel = $_houseLevel');
+    int cost = 500 * _houseLevel;
+    return GestureDetector(
+      onVerticalDragEnd: (details) {
+        if (details.primaryVelocity! > 0) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
+        body: Stack(
+          children: [
+            // 背景图
+            Image.asset(
+              'assets/house/house_level_$_houseLevel.png',
+              width: double.infinity,
+              height: double.infinity,
+              fit: BoxFit.cover,
+            ),
+            // 渐变遮罩
+            Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withOpacity(0.55),
+                    Colors.transparent,
+                    Colors.black.withOpacity(0.65),
+                  ],
+                  stops: const [0.0, 0.5, 1.0],
                 ),
-                child: const Center(
+              ),
+            ),
+            // 内容区毛玻璃卡片
+            Center(
+              child: SingleChildScrollView(
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+                  padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 28),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.13),
+                    borderRadius: BorderRadius.circular(28),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.18),
+                        blurRadius: 24,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                    border: Border.all(color: Colors.white.withOpacity(0.18), width: 1.5),
+                  ),
                   child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Icon(Icons.house, size: 100, color: Colors.brown),
-                      SizedBox(height: 16),
-                      Text(
-                        '房屋图片加载中...',
-                        style: TextStyle(
-                          fontSize: 18,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
+                      Text('DEBUG-HOUSEPAGE', style: TextStyle(fontSize: 22, color: Colors.red, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.star, color: Colors.yellow.shade700, size: 28),
+                          const SizedBox(width: 8),
+                          Text('碎片：$_fragments', style: TextStyle(fontSize: 22, color: Colors.white, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 6, color: Colors.black, offset: Offset(1,1))])),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      Text('我的小屋', style: TextStyle(fontSize: 36, color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 2, shadows: [Shadow(blurRadius: 12, color: Colors.black, offset: Offset(2,2))])),
+                      const SizedBox(height: 18),
+                      Container(
+                        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 32),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.18),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Column(
+                          children: [
+                            Text('当前等级：$_houseLevel / $_maxLevel', style: TextStyle(fontSize: 22, color: Colors.white, fontWeight: FontWeight.w500, shadows: [Shadow(blurRadius: 8, color: Colors.black)])),
+                            const SizedBox(height: 18),
+                            _houseLevel < _maxLevel
+                                ? Container(
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(colors: [Color(0xFFffb347), Color(0xFFffcc33)]),
+                                      borderRadius: BorderRadius.circular(14),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.orange.withOpacity(0.25),
+                                          blurRadius: 12,
+                                          offset: Offset(0, 4),
+                                        ),
+                                      ],
+                                    ),
+                                    child: ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.transparent,
+                                        shadowColor: Colors.transparent,
+                                        padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 18),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                      ),
+                                      onPressed: _fragments >= cost ? _upgradeHouse : null,
+                                      child: Text('升级（消耗 $cost 碎片）', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.brown.shade900, letterSpacing: 1)),
+                                    ),
+                                  )
+                                : Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade400.withOpacity(0.45),
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.transparent,
+                                        shadowColor: Colors.transparent,
+                                        padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 18),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                      ),
+                                      onPressed: null,
+                                      child: Text('已满级', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.grey.shade800, letterSpacing: 1)),
+                                    ),
+                                  ),
+                          ],
                         ),
                       ),
+                      const SizedBox(height: 32),
+                      Text('下滑屏幕返回老虎机', style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w500, letterSpacing: 1)),
                     ],
                   ),
                 ),
-              );
-            },
-          ),
-          // 半透明遮罩层，确保文字可读性
-          Container(
-            color: Colors.black.withOpacity(0.3),
-          ),
-          // UI控件层
-          SafeArea(
-            child: Column(
-              children: [
-                _buildHeader(),
-                Expanded(
-                  child: _buildHouseLevelBadge(),
-                ),
-                _buildBottomControls(),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHeader() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                themeChineseNames[themes[_currentTheme]!.name] ?? '我的家园',
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  shadows: [
-                    Shadow(
-                      blurRadius: 2,
-                      color: Colors.black54,
-                      offset: Offset(1, 1),
-                    ),
-                  ],
-                ),
               ),
-              Text(
-                _levelDescriptions[_houseLevel] ?? '',
-                style: const TextStyle(
-                  fontSize: 16,
-                  color: Colors.white70,
-                  shadows: [
-                    Shadow(
-                      blurRadius: 1,
-                      color: Colors.black54,
-                      offset: Offset(1, 1),
-                    ),
-                  ],
-                ),
+            ),
+            Align(
+              alignment: Alignment.topCenter,
+              child: ConfettiWidget(
+                confettiController: _confettiController,
+                blastDirection: pi / 2,
+                maxBlastForce: 5,
+                minBlastForce: 2,
+                emissionFrequency: 0.05,
+                numberOfParticles: 50,
+                gravity: 0.1,
+                shouldLoop: false,
+                colors: const [
+                  Colors.green,
+                  Colors.blue,
+                  Colors.pink,
+                  Colors.orange,
+                  Colors.purple
+                ],
               ),
-            ],
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.amber.withOpacity(0.9),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.orange.shade700),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.auto_awesome, color: Colors.orange, size: 20),
-                const SizedBox(width: 4),
-                Text(
-                  '$_totalFragments',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: Colors.black87,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHouseLevelBadge() {
-    return Center(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.purple.withOpacity(0.9),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.purple.shade700, width: 2),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.5),
-              blurRadius: 10,
-              spreadRadius: 2,
-              offset: const Offset(0, 4),
             ),
           ],
-        ),
-        child: Text(
-          'Lv.$_houseLevel',
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 24,
-            shadows: [
-              Shadow(
-                blurRadius: 2,
-                color: Colors.black,
-                offset: Offset(1, 1),
-              ),
-            ],
-          ),
         ),
       ),
     );
   }
 
-  Widget _buildBottomControls() {
-    final canUpgrade = _houseLevel < 5;
-    final nextLevelCost = _levelCosts[_houseLevel + 1] ?? 0;
-    final hasEnoughFragments = _totalFragments >= nextLevelCost;
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (canUpgrade) ...[
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(15),
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: Column(
-                children: [
-                  Text(
-                    '升级到 ${_levelDescriptions[_houseLevel + 1]}',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.auto_awesome, color: Colors.orange, size: 20),
-                      const SizedBox(width: 4),
-                      Text(
-                        '$nextLevelCost 碎片',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: hasEnoughFragments ? Colors.green : Colors.red,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: hasEnoughFragments ? Colors.green : Colors.grey,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(15),
-                  ),
-                  elevation: hasEnoughFragments ? 8 : 2,
-                ),
-                onPressed: hasEnoughFragments ? _upgradeHouse : null,
-                child: Text(
-                  hasEnoughFragments ? '升级房屋' : '碎片不足',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-          ] else ...[
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.amber.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(15),
-                border: Border.all(color: Colors.amber.shade700, width: 2),
-              ),
-              child: const Column(
-                children: [
-                  Icon(Icons.emoji_events, size: 40, color: Colors.orange),
-                  SizedBox(height: 8),
-                  Text(
-                    '恭喜！',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  Text(
-                    '你的房屋已达到最高等级！',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
+  @override
+  void dispose() {
+    _confettiController.dispose();
+    _audioPlayer.dispose();
+    super.dispose();
   }
 } 

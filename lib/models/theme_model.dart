@@ -132,6 +132,12 @@ final Map<String, ThemeModel> themes = {
       // 道具
       ...['Crystal Dice.png']
         .map((file) => CollectionCard(name: _propNameFromPath(file), imagePath: file, isProp: true)),
+      // 社交道具
+      CollectionCard(
+        name: '社交道具',
+        imagePath: 'Item_Social.png',
+        isProp: true,
+      ),
     ],
   ),
   'japan': ThemeModel(
@@ -145,6 +151,12 @@ final Map<String, ThemeModel> themes = {
       // 道具
       ...['Crystal Dice.png']
         .map((file) => CollectionCard(name: _propNameFromPath(file), imagePath: file, isProp: true)),
+      // 社交道具
+      CollectionCard(
+        name: '社交道具',
+        imagePath: 'Item_Social.png',
+        isProp: true,
+      ),
     ],
   ),
 }; 

@@ -7,6 +7,8 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:confetti/confetti.dart';
 import 'models/theme_model.dart';
+import 'house_page.dart';
+import 'social_page.dart';
 
 class SlotGamePage extends StatefulWidget {
   const SlotGamePage({super.key});
@@ -30,7 +32,6 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   String _fragmentGainText = ''; // 碎片增加显示文字
   bool _showingFragmentGain = false; // 是否正在显示碎片增加动画
   bool _isButtonPressed = false;
-  final List<_FragmentParticle> _fragmentParticles = [];
 
   final Map<String, AnimationController> _animationControllers = {};
   final Map<String, Animation<double>> _animations = {};
@@ -38,6 +39,9 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   final GlobalKey _slotMachineKey = GlobalKey();
   final GlobalKey _fragmentCounterKey = GlobalKey();
   Offset? _fragmentGainOffset;
+
+  bool _crystalDiceEffectVisible = false;
+  final GlobalKey _spinProgressKey = GlobalKey();
 
   @override
   void initState() {
@@ -91,7 +95,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _spinCount = prefs.getInt('spinCount_${_currentTheme.name}') ?? 0;
-      _fragmentCount = prefs.getInt('fragmentCount_${_currentTheme.name}') ?? 0;
+      _fragmentCount = prefs.getInt('fragmentCount') ?? 0;
       _remainingSpins = prefs.getInt('remainingSpins_${_currentTheme.name}') ?? 100;
       
       for (var card in _collection) {
@@ -103,7 +107,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   Future<void> _saveState() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('spinCount_${_currentTheme.name}', _spinCount);
-    await prefs.setInt('fragmentCount_${_currentTheme.name}', _fragmentCount);
+    await prefs.setInt('fragmentCount', _fragmentCount);
     await prefs.setInt('remainingSpins_${_currentTheme.name}', _remainingSpins);
     for (var card in _collection) {
       await prefs.setInt('card_progress_${_currentTheme.name}_${card.name}', card.progress);
@@ -194,16 +198,24 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     }
   }
 
-  void _resetProgress() {
+  void _resetProgress() async {
     setState(() {
       _spinCount = 0;
       _fragmentCount = 0;
-      _remainingSpins = 100; // 重置转动次数到100
+      _remainingSpins = 100;
       for (var card in _collection) {
         card.progress = 0;
       }
     });
+    // 清除房产等级和碎片
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('house_level_${_currentTheme.name}', 1);
+    await prefs.setInt('fragmentCount', 0);
     _saveState();
+    // 弹窗提示
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已重置所有进度，房产等级和碎片也已清零！')),
+    );
   }
 
   void _checkResult(List<CollectionCard> results) {
@@ -222,11 +234,9 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     } else {
       // 三个不同的情况，奖励+3
       _triggerFragmentAnimationOverlay('三个不同', 3, onComplete: () {
-        _showFragmentGain(3, onComplete: () {
-          setState(() => _fragmentCount += 3);
-          _saveState();
-        });
-      });
+        setState(() => _fragmentCount += 3);
+        _saveState();
+      }, showGainText: true);
       _playFragmentSound();
     }
   }
@@ -236,6 +246,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     if (itemName == '水晶骰子') {
       final spinsToAdd = matchCount == 3 ? 100 : (matchCount == 2 ? 25 : 0);
       if (spinsToAdd > 0) {
+        _triggerCrystalDiceEffect();
         setState(() => _remainingSpins += spinsToAdd);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('水晶骰子发威！获得 $spinsToAdd 次转动机会！')),
@@ -244,6 +255,11 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
         _triggerConfetti();
       }
       _saveState();
+      return;
+    }
+    // 新增：社交道具逻辑
+    if (itemName == '社交道具') {
+      _showFriendHouse();
       return;
     }
 
@@ -261,11 +277,9 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
       // 已收集齐的重复碎片奖励：2连=10，3连=50
       final fragmentGain = matchCount == 3 ? 50 : 10;
       _triggerFragmentAnimationOverlay(card!.name, fragmentGain, onComplete: () {
-        _showFragmentGain(fragmentGain, onComplete: () {
-          setState(() => _fragmentCount += fragmentGain);
-          _saveState();
-        });
-      });
+        setState(() => _fragmentCount += fragmentGain);
+        _saveState();
+      }, showGainText: true);
       _playFragmentSound();
     } else {
       setState(() {
@@ -292,14 +306,35 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     _saveState();
   }
 
+  void _showFriendHouse() async {
+    final fragments = await Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => SocialPage()),
+    );
+    if (fragments != null && fragments is int) {
+      setState(() {
+        _fragmentCount += fragments;
+      });
+    }
+  }
+
+  void _showHousePage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => HousePage()),
+    );
+  }
+
   void _triggerConfetti() {
     _confettiController.play();
   }
 
-  void _triggerFragmentAnimationOverlay(String sourceCardName, int count, {VoidCallback? onComplete}) {
+  void _triggerFragmentAnimationOverlay(String sourceCardName, int count, {VoidCallback? onComplete, bool showGainText = true}) {
     final startKey = _slotMachineKey;
     final endKey = _fragmentCounterKey;
+    debugPrint('触发碎片特效: sourceCardName=$sourceCardName, count=$count');
+    debugPrint('startKey.currentContext: [33m[1m${startKey.currentContext}[0m');
+    debugPrint('endKey.currentContext: [33m[1m${endKey.currentContext}[0m');
     if (startKey.currentContext == null || endKey.currentContext == null) {
+      debugPrint('碎片特效未触发：startKey或endKey的context为null');
       if (onComplete != null) onComplete();
       return;
     }
@@ -314,6 +349,8 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
       Offset(endRenderBox.size.width / 2, endRenderBox.size.height / 2),
     );
 
+    debugPrint('startGlobalCenter: $startGlobalCenter, endGlobalCenter: $endGlobalCenter');
+
     final overlay = Overlay.of(context);
     late OverlayEntry entry;
     bool completed = false;
@@ -322,17 +359,40 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
         key: UniqueKey(),
         startPosition: startGlobalCenter,
         endPosition: endGlobalCenter,
-        count: count, // 传递星星数量
+        count: count,
         onCompleted: (key) {
           if (!completed) {
             completed = true;
             entry.remove();
-            if (onComplete != null) onComplete();
+            if (showGainText) {
+              _showFragmentGain(count, onComplete: onComplete);
+            } else {
+              if (onComplete != null) onComplete();
+            }
           }
         },
       ),
     );
     overlay.insert(entry);
+  }
+
+  void _showFragmentGain(int count, {VoidCallback? onComplete}) {
+    final RenderBox? box = _fragmentCounterKey.currentContext?.findRenderObject() as RenderBox?;
+    final Offset? global = box?.localToGlobal(Offset(box.size.width / 2, box.size.height / 2));
+    setState(() {
+      _fragmentGainText = '+$count';
+      _showingFragmentGain = true;
+      _fragmentGainOffset = global;
+    });
+
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        setState(() {
+          _showingFragmentGain = false;
+        });
+        if (onComplete != null) onComplete();
+      }
+    });
   }
 
   void _changeTheme(String themeKey) {
@@ -400,22 +460,10 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     }
   }
 
-  void _showFragmentGain(int count, {VoidCallback? onComplete}) {
-    final RenderBox? box = _fragmentCounterKey.currentContext?.findRenderObject() as RenderBox?;
-    final Offset? global = box?.localToGlobal(Offset(box.size.width / 2, box.size.height / 2));
-    setState(() {
-      _fragmentGainText = '+$count';
-      _showingFragmentGain = true;
-      _fragmentGainOffset = global;
-    });
-
-    Future.delayed(const Duration(milliseconds: 1500), () {
-      if (mounted) {
-        setState(() {
-          _showingFragmentGain = false;
-        });
-        if (onComplete != null) onComplete();
-      }
+  void _triggerCrystalDiceEffect() {
+    setState(() => _crystalDiceEffectVisible = true);
+    Future.delayed(const Duration(milliseconds: 1200), () {
+      if (mounted) setState(() => _crystalDiceEffectVisible = false);
     });
   }
 
@@ -433,45 +481,65 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   // region UI Building
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF1a2b3c),
-      appBar: _buildAppBar(),
-      body: Stack(
-        alignment: Alignment.topCenter,
-        children: [
-          Center(
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: <Widget>[
-                    const SizedBox(height: 20),
-                    _buildSlotMachineContainer(),
-                    const SizedBox(height: 20),
-                    _buildSpinWidgets(),
-                    const SizedBox(height: 24),
-                    _buildCollectionGrid(),
-                    const SizedBox(height: 120),
-                  ],
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque, // 允许手势穿透
+      onVerticalDragEnd: (details) {
+        if (details.primaryVelocity != null && details.primaryVelocity! < -20) { // 降低阈值
+          // 向上滑动，进入HousePage
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (context) => HousePage()),
+          );
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          children: [
+            // 主要内容
+            Column(
+              children: [
+                // 顶部状态栏
+                _buildTopBar(),
+                // 老虎机主体
+                Expanded(
+                  child: _buildSlotMachine(),
+                ),
+              ],
+            ),
+            // 碎片获得动画
+            if (_fragmentGainOffset != null)
+              Positioned(
+                left: _fragmentGainOffset!.dx,
+                top: _fragmentGainOffset!.dy,
+                child: TweenAnimationBuilder<double>(
+                  tween: Tween(begin: 0.0, end: 1.0),
+                  duration: const Duration(milliseconds: 1000),
+                  builder: (context, value, child) {
+                    return Transform.translate(
+                      offset: Offset(0, -50 * value),
+                      child: Opacity(
+                        opacity: 1 - value,
+                        child: Text(
+                          _fragmentGainText,
+                          style: const TextStyle(
+                            color: Colors.yellow,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                  onEnd: () {
+                    setState(() {
+                      _fragmentGainOffset = null;
+                    });
+                  },
                 ),
               ),
-            ),
-          ),
-          ConfettiWidget(
-            confettiController: _confettiController,
-            blastDirectionality: BlastDirectionality.explosive,
-            shouldLoop: false,
-            emissionFrequency: 0.05,
-            numberOfParticles: 50,
-            gravity: 0.2,
-            maxBlastForce: 25,
-            minBlastForce: 10,
-          ),
-          ..._fragmentParticles,
-          // 数字动画浮在碎片计数器右上角
-          _buildFragmentCounter(),
-        ],
+            if (_crystalDiceEffectVisible) CrystalDiceEffect(targetKey: _spinProgressKey),
+          ],
+        ),
       ),
     );
   }
@@ -494,45 +562,24 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   Widget _buildFragmentCounter() {
     return Padding(
       padding: const EdgeInsets.only(right: 8.0),
-      child: Stack(
+      child: SizedBox(
         key: _fragmentCounterKey,
-        alignment: Alignment.center,
-        children: [
-          Row(
+        height: 32,
+        width: 80,
+        child: Center(
+          child: Row(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow.shade700, size: 18),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
               Text(
-                '$_fragmentCount 碎片',
+                '$_fragmentCount',
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
               ),
             ],
           ),
-          if (_showingFragmentGain)
-            Padding(
-              padding: const EdgeInsets.only(top: 22),
-              child: AnimatedOpacity(
-                opacity: _showingFragmentGain ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 300),
-                child: Text(
-                  _fragmentGainText,
-                  style: TextStyle(
-                    color: Colors.green.shade400,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 16,
-                    shadows: [
-                      Shadow(
-                        blurRadius: 2,
-                        color: Colors.black.withOpacity(0.8),
-                        offset: const Offset(1, 1),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
@@ -553,91 +600,73 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     );
   }
 
-  Widget _buildSlotMachineContainer() {
-    final boxDecoration = BoxDecoration(
-      color: const Color(0xFF6B4F3A),
-      borderRadius: const BorderRadius.all(Radius.circular(15)),
-      border: Border.all(color: const Color(0xFF4A3525), width: 4),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withOpacity(0.6),
-          spreadRadius: 2,
-          blurRadius: 10,
-          offset: const Offset(0, 6),
-        ),
-      ],
-    );
-    final innerDecoration = BoxDecoration(
-      color: const Color(0xFF4A3525),
-      borderRadius: const BorderRadius.all(Radius.circular(10)),
-      border: Border.all(color: const Color(0xFF2d1f14), width: 2),
-    );
-
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
-      decoration: boxDecoration,
-      child: DecoratedBox(
-        decoration: innerDecoration,
-        child: Padding(
-          padding: const EdgeInsets.all(4.0),
-          child: Row(
-            key: _slotMachineKey,
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: List.generate(3, (i) => _reels[i]),
+  Widget _buildSlotMachine() {
+    return Stack(
+      alignment: Alignment.topCenter,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: Column(
+            children: <Widget>[
+              const SizedBox(height: 20),
+              _buildSlotMachineContainer(),
+              _buildSpinProgressBar(),
+              const SizedBox(height: 8),
+              // 旋转按钮单独一行居中
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 120,
+                    child: _buildSpinButton(),
+                  ),
+                ],
+              ),
+              // 5个宽按钮一排
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _buildWideButton('重置', _buildResetButton(), color: Colors.red.shade800),
+                  _buildWideButton('2连作弊', _buildMiniCheatButton('2连作弊', () => _cheatMatch(2), color: Colors.purple.shade700)),
+                  _buildWideButton('3连作弊', _buildMiniCheatButton('3连作弊', () => _cheatMatch(3), color: Colors.orange.shade700)),
+                  _buildWideButton('水晶作弊', _buildMiniCheatButton('水晶作弊', () => _cheatProp('水晶骰子', 2), color: Colors.blue.shade700)),
+                  _buildWideButton('社交作弊', _buildMiniCheatButton('社交作弊', () => _cheatProp('社交道具', 2), color: Colors.green.shade700)),
+                ],
+              ),
+              // 卡牌网格自适应剩余空间
+              Expanded(
+                child: _buildCollectionGrid(),
+              ),
+            ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildSpinWidgets() {
-    return Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Column(
-              children: [
-                _buildCounterColumn('Spin次数', '$_spinCount'),
-                const SizedBox(height: 8),
-                _buildResetButton(),
-              ],
-            ),
-            Column(
-              children: [
-                _buildSpinProgressBar(),
-                const SizedBox(height: 8),
-                _buildSpinButton(),
-              ],
-            ),
-            Column(
-              children: [
-                _buildCheatButton('随机2连', () => _cheatMatch(2)),
-                const SizedBox(height: 8),
-                _buildCheatButton('随机3连', () => _cheatMatch(3)),
-              ],
-            ),
-          ],
+        ConfettiWidget(
+          confettiController: _confettiController,
+          blastDirectionality: BlastDirectionality.explosive,
+          shouldLoop: false,
+          emissionFrequency: 0.05,
+          numberOfParticles: 50,
+          gravity: 0.2,
+          maxBlastForce: 25,
+          minBlastForce: 10,
         ),
+        // 数字动画浮在碎片计数器右上角
+        _buildFragmentCounter(),
       ],
     );
   }
 
-  Widget _buildCounterColumn(String label, String value) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          value,
-          style: const TextStyle(
-              color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 14),
-        ),
+  Widget _buildTopBar() {
+    return AppBar(
+      title: Text(
+        themeChineseNames[_currentTheme.name] ?? _currentTheme.name,
+        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+      ),
+      backgroundColor: Colors.black.withOpacity(0.3),
+      elevation: 0,
+      actions: [
+        _buildThemeSwitcher(), // 只保留主题切换按钮
       ],
     );
   }
@@ -645,6 +674,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
   Widget _buildSpinProgressBar() {
     final progress = _remainingSpins / 100.0;
     return Container(
+      key: _spinProgressKey,
       width: 90,
       height: 16,
       decoration: BoxDecoration(
@@ -697,7 +727,7 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
           opacity: _reelKeys.any((key) => key.currentState?.isSpinning ?? false) ? 0.6 : 1.0,
           child: Container(
             width: 90,
-            height: 65, // 降低高度
+            height: 65,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
               gradient: const LinearGradient(
@@ -724,10 +754,10 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
             ),
             child: Center(
               child: Text(
-                '开始',
+                '旋转',
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 20, // 稍微减小字体
+                  fontSize: 20,
                   fontWeight: FontWeight.w900,
                   letterSpacing: 2,
                   shadows: [
@@ -787,34 +817,62 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     );
   }
 
-  Widget _buildCheatButton(String text, VoidCallback onPressed) {
-    return ElevatedButton(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.purple.shade800,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        minimumSize: const Size(60, 30),
+  Widget _buildCheatButtons() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            _buildMiniCheatButton('2连', () => _cheatMatch(2), color: Colors.purple.shade700),
+            const SizedBox(width: 4),
+            _buildMiniCheatButton('3连', () => _cheatMatch(3), color: Colors.orange.shade700),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            _buildMiniCheatButton('水晶', () => _cheatProp('水晶骰子', 2), color: Colors.blue.shade700),
+            const SizedBox(width: 4),
+            _buildMiniCheatButton('社交', () => _cheatProp('社交道具', 2), color: Colors.green.shade700),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMiniCheatButton(String text, VoidCallback onPressed, {Color? color}) {
+    return SizedBox(
+      width: 40,
+      height: 22,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color ?? Colors.blueGrey.shade700,
+          padding: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
+        ),
+        onPressed: onPressed,
+        child: Text(text, style: const TextStyle(fontSize: 9, color: Colors.white)),
       ),
-      onPressed: onPressed,
-      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 12)),
     );
   }
 
   Widget _buildCollectionGrid() {
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-        childAspectRatio: 0.85, // 增加高度比例，让卡牌更紧凑
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          crossAxisSpacing: 6,
+          mainAxisSpacing: 6,
+          childAspectRatio: 0.7,
+        ),
+        itemCount: _collection.length,
+        itemBuilder: (context, index) {
+          final card = _collection[index];
+          return _buildCard(card);
+        },
       ),
-      itemCount: _collection.length,
-      itemBuilder: (context, index) {
-        final card = _collection[index];
-        return _buildCard(card);
-      },
     );
   }
 
@@ -970,8 +1028,90 @@ class _SlotGamePageState extends State<SlotGamePage> with TickerProviderStateMix
     );
   }
 
+  // 新增作弊道具方法
+  void _cheatProp(String propName, int matchCount) async {
+    if (_reelKeys.any((key) => key.currentState?.isSpinning ?? true)) return;
+    if (_remainingSpins <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('转动次数已用完，请使用刷新按钮重置！')),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    _playSpinStartSound();
+    setState(() => _isButtonPressed = true);
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (mounted) {
+        setState(() => _isButtonPressed = false);
+      }
+    });
+    List<Future<CollectionCard>> futures = [];
+    for (int i = 0; i < 3; i++) {
+      if (i < matchCount) {
+        futures.add(_reelKeys[i].currentState!.spinTo(propName));
+      } else {
+        futures.add(_reelKeys[i].currentState!.spin());
+      }
+    }
+    try {
+      final finalResults = await Future.wait(futures);
+      if (mounted) {
+        setState(() {
+          _spinCount++;
+          _remainingSpins--;
+        });
+        _checkResult(finalResults);
+        _saveState();
+      }
+    } catch (e) {}
+  }
 
-// endregion
+  Widget _buildSlotMachineContainer() {
+    final boxDecoration = BoxDecoration(
+      color: const Color(0xFF6B4F3A),
+      borderRadius: const BorderRadius.all(Radius.circular(15)),
+      border: Border.all(color: const Color(0xFF4A3525), width: 4),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.6),
+          spreadRadius: 2,
+          blurRadius: 10,
+          offset: const Offset(0, 6),
+        ),
+      ],
+    );
+    final innerDecoration = BoxDecoration(
+      color: const Color(0xFF4A3525),
+      borderRadius: const BorderRadius.all(Radius.circular(10)),
+      border: Border.all(color: const Color(0xFF2d1f14), width: 2),
+    );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+      decoration: boxDecoration,
+      child: DecoratedBox(
+        decoration: innerDecoration,
+        child: Padding(
+          padding: const EdgeInsets.all(4.0),
+          child: Row(
+            key: _slotMachineKey,
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: List.generate(3, (i) => _reels[i]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWideButton(String label, Widget child, {Color? color}) {
+    return SizedBox(
+      width: 70,
+      height: 36,
+      child: child,
+    );
+  }
+
+  // endregion
 }
 
 // region SlotReel Widget
@@ -1170,13 +1310,14 @@ class _FragmentParticle extends StatefulWidget {
 class _FragmentParticleState extends State<_FragmentParticle> with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
-  late List<Offset> _controlPoints;
+  late List<_ParticleData> _particles;
+  final Random _random = Random();
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
-      duration: Duration(milliseconds: 800 + Random().nextInt(400)),
+      duration: const Duration(milliseconds: 500),
       vsync: this,
     )..addStatusListener((status) {
       if (status == AnimationStatus.completed) {
@@ -1184,14 +1325,36 @@ class _FragmentParticleState extends State<_FragmentParticle> with SingleTickerP
       }
     });
 
-    final random = Random();
-    _controlPoints = List.generate(widget.count, (i) {
-      final controlX = lerpDouble(widget.startPosition.dx, widget.endPosition.dx, 0.5)! + (random.nextDouble() - 0.5) * 200;
-      final controlY = lerpDouble(widget.startPosition.dy, widget.endPosition.dy, 0.2)! - random.nextDouble() * 150;
-      return Offset(controlX, controlY);
+    // 初始化粒子，数量由count参数决定
+    _particles = List.generate(widget.count, (i) {
+      // 随机分布在屏幕四周
+      final angle = _random.nextDouble() * 2 * pi;
+      final distance = 200.0 + _random.nextDouble() * 100;
+      final randomOffset = Offset(
+        cos(angle) * distance,
+        sin(angle) * distance,
+      );
+      return _ParticleData(
+        startPosition: widget.startPosition + randomOffset,
+        controlPoint1: Offset(
+          widget.startPosition.dx + (_random.nextDouble() - 0.5) * 300,
+          widget.startPosition.dy - _random.nextDouble() * 200,
+        ),
+        controlPoint2: Offset(
+          widget.endPosition.dx + (_random.nextDouble() - 0.5) * 100,
+          widget.endPosition.dy + _random.nextDouble() * 100,
+        ),
+        endPosition: widget.endPosition,
+        scale: 0.5 + _random.nextDouble() * 0.5,
+        rotation: _random.nextDouble() * 2 * pi,
+        opacity: 0.8 + _random.nextDouble() * 0.2,
+      );
     });
 
-    _animation = CurvedAnimation(parent: _controller, curve: Curves.easeOut);
+    _animation = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeInOut,
+    );
     _controller.forward();
   }
   
@@ -1206,28 +1369,218 @@ class _FragmentParticleState extends State<_FragmentParticle> with SingleTickerP
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
-        if (_controller.isAnimating) {
-          final t = _animation.value;
-          return Stack(
-            children: List.generate(widget.count, (i) {
-              final p0 = widget.startPosition;
-              final p1 = _controlPoints[i];
-              final p2 = widget.endPosition;
-              final x = pow(1 - t, 2) * p0.dx + 2 * (1 - t) * t * p1.dx + pow(t, 2) * p2.dx;
-              final y = pow(1 - t, 2) * p0.dy + 2 * (1 - t) * t * p1.dy + pow(t, 2) * p2.dy;
-              return Positioned(
-                left: x,
-                top: y,
-                child: Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow.shade700, size: 20),
-              );
-            }),
-          );
-        } else {
-          return const SizedBox.shrink();
-        }
+        final t = _animation.value;
+        return Stack(
+          children: _particles.map((particle) {
+            // 使用三次贝塞尔曲线计算位置
+            final x = _cubicBezier(
+              t,
+              particle.startPosition.dx,
+              particle.controlPoint1.dx,
+              particle.controlPoint2.dx,
+              particle.endPosition.dx,
+            );
+            final y = _cubicBezier(
+              t,
+              particle.startPosition.dy,
+              particle.controlPoint1.dy,
+              particle.controlPoint2.dy,
+              particle.endPosition.dy,
+            );
+
+            // 计算缩放和旋转
+            final scale = particle.scale * (1.0 + 0.2 * sin(t * pi));
+            final rotation = particle.rotation + t * 2 * pi;
+            final opacity = particle.opacity * (1.0 - t * 0.5);
+
+            return Positioned(
+              left: x - 10, // 居中偏移
+              top: y - 10,  // 居中偏移
+              child: Opacity(
+                opacity: opacity,
+                child: Transform.rotate(
+                  angle: rotation,
+                  child: Transform.scale(
+                    scale: scale,
+                    child: Icon(
+                      CupertinoIcons.staroflife_fill,
+                      color: Colors.yellow.shade700,
+                      size: 20,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        );
       },
     );
   }
+
+  // 三次贝塞尔曲线计算
+  double _cubicBezier(double t, double p0, double p1, double p2, double p3) {
+    final oneMinusT = 1 - t;
+    return oneMinusT * oneMinusT * oneMinusT * p0 +
+           3 * oneMinusT * oneMinusT * t * p1 +
+           3 * oneMinusT * t * t * p2 +
+           t * t * t * p3;
+  }
+}
+
+class _ParticleData {
+  final Offset startPosition;
+  final Offset controlPoint1;
+  final Offset controlPoint2;
+  final Offset endPosition;
+  final double scale;
+  final double rotation;
+  final double opacity;
+
+  _ParticleData({
+    required this.startPosition,
+    required this.controlPoint1,
+    required this.controlPoint2,
+    required this.endPosition,
+    required this.scale,
+    required this.rotation,
+    required this.opacity,
+  });
 }
 // endregion 
+
+// region CrystalDiceEffect Widget
+class CrystalDiceEffect extends StatefulWidget {
+  final int count;
+  final Duration duration;
+  final VoidCallback? onCompleted;
+  final GlobalKey? targetKey;
+  const CrystalDiceEffect({this.count = 50, this.duration = const Duration(milliseconds: 1200), this.onCompleted, this.targetKey, super.key});
+
+  @override
+  State<CrystalDiceEffect> createState() => _CrystalDiceEffectState();
+}
+
+class _CrystalDiceEffectState extends State<CrystalDiceEffect> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+  late List<_ParticleData> _particles;
+  Offset? _targetCenter;
+  final Random _random = Random();
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: widget.duration)
+      ..forward().whenComplete(() {
+        if (widget.onCompleted != null) widget.onCompleted!();
+      });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.targetKey?.currentContext != null) {
+        final box = widget.targetKey!.currentContext!.findRenderObject() as RenderBox;
+        final center = box.localToGlobal(Offset(box.size.width / 2, box.size.height / 2));
+        setState(() => _targetCenter = center);
+      }
+    });
+    // 初始化粒子，数量由count参数决定
+    final size = WidgetsBinding.instance.window.physicalSize / WidgetsBinding.instance.window.devicePixelRatio;
+    _particles = List.generate(widget.count, (i) {
+      final angle = _random.nextDouble() * 2 * pi;
+      final distance = 200.0 + _random.nextDouble() * 100;
+      final randomOffset = Offset(
+        cos(angle) * distance,
+        sin(angle) * distance,
+      );
+      final start = Offset(size.width / 2, size.height / 2) + randomOffset;
+      return _ParticleData(
+        startPosition: start,
+        controlPoint1: Offset(
+          start.dx + (_random.nextDouble() - 0.5) * 300,
+          start.dy - _random.nextDouble() * 200,
+        ),
+        controlPoint2: Offset(
+          (_targetCenter?.dx ?? size.width - 40) + (_random.nextDouble() - 0.5) * 100,
+          (_targetCenter?.dy ?? 40) + _random.nextDouble() * 100,
+        ),
+        endPosition: _targetCenter ?? Offset(size.width - 40, 40),
+        scale: 0.7 + _random.nextDouble() * 0.8,
+        rotation: _random.nextDouble() * 2 * pi,
+        opacity: 0.7 + _random.nextDouble() * 0.3,
+      );
+    });
+    _animation = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    // 动态获取目标点
+    Offset? dynamicTargetCenter;
+    if (widget.targetKey?.currentContext != null) {
+      final box = widget.targetKey!.currentContext!.findRenderObject() as RenderBox;
+      dynamicTargetCenter = box.localToGlobal(Offset(box.size.width / 2, box.size.height / 2));
+    }
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          final t = _animation.value;
+          final target = dynamicTargetCenter ?? _targetCenter ?? Offset(size.width - 40, 40);
+          return Stack(
+            children: _particles.map((particle) {
+              final x = _cubicBezier(
+                t,
+                particle.startPosition.dx,
+                particle.controlPoint1.dx,
+                particle.controlPoint2.dx,
+                target.dx,
+              );
+              final y = _cubicBezier(
+                t,
+                particle.startPosition.dy,
+                particle.controlPoint1.dy,
+                particle.controlPoint2.dy,
+                target.dy,
+              );
+              final scale = particle.scale * (0.9 + 0.2 * sin(t * pi));
+              final rotation = particle.rotation + t * 2 * pi;
+              final opacity = particle.opacity * (1.0 - t * 0.5);
+              return Positioned(
+                left: x - 24,
+                top: y - 24,
+                child: Opacity(
+                  opacity: opacity,
+                  child: Transform.rotate(
+                    angle: rotation,
+                    child: Transform.scale(
+                      scale: scale,
+                      child: Image.asset(
+                        'assets/slot_item/Crystal Dice.png',
+                        width: 48,
+                        height: 48,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    );
+  }
+
+  double _cubicBezier(double t, double p0, double p1, double p2, double p3) {
+    final oneMinusT = 1 - t;
+    return oneMinusT * oneMinusT * oneMinusT * p0 +
+        3 * oneMinusT * oneMinusT * t * p1 +
+        3 * oneMinusT * t * t * p2 +
+        t * t * t * p3;
+  }
+}
 // endregion 
