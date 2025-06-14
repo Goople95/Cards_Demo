@@ -3,6 +3,9 @@ import 'package:confetti/confetti.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'dart:math';
 import 'package:flutter/cupertino.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
+import 'fragment_model.dart';
 
 // 社交挑战页面，支持10道题随机答题，答对500答错200
 class SocialPage extends StatefulWidget {
@@ -29,13 +32,9 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
   late AudioPlayer _audioPlayer;
   final Random _random = Random();
 
-  // 新增：好友房屋等级、点赞数、碎片数、背景图、国家、头像
+  // 新增：好友房屋等级、点赞数、背景图、国家、头像
   late int _houseLevel;
   late int _likeCount;
-  late int _fragmentCount;
-  late String _bgImage;
-  late String _country;
-  late String _avatarImg;
 
   final List<String> _countryList = [
     '中国', '日本', '英国', '法国', '德国', '意大利', '西班牙', '希腊', '美国', '澳大利亚'
@@ -76,6 +75,10 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
 
   Offset? _resultCenter;
 
+  late String _bgImage;
+  late String _country;
+  late String _avatarImg;
+
   @override
   void initState() {
     super.initState();
@@ -85,8 +88,7 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
     _audioPlayer = AudioPlayer();
     _houseLevel = 1 + _random.nextInt(6); // 1-6
     _likeCount = 10 + _random.nextInt(9991); // 10-10000
-    _fragmentCount = 1000 + _random.nextInt(99000); // 1000-99999
-    _friendFragmentCount = _fragmentCount;
+    _friendFragmentCount = 1000 + _random.nextInt(99000); // 好友碎片数为独立随机数
     _bgImage = 'assets/social/Social_House_${1 + _random.nextInt(10)}.png';
     _country = _countryList[_random.nextInt(_countryList.length)];
     _avatarImg = 'assets/social/Avatar_${1 + _random.nextInt(10)}.png';
@@ -100,7 +102,7 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
     return names[_random.nextInt(names.length)];
   }
 
-  void _handleQuizAnswer(bool answer) {
+  void _handleQuizAnswer(bool answer) async {
     bool correct = (answer == _currentQuiz['a']);
     setState(() {
       _answered = true;
@@ -111,9 +113,7 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
     if (correct) {
       // 延迟一帧再播放彩带，确保UI已经更新
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        print('Confetti triggered! (before play)'); // 调试信息
         _confettiController.play();
-        print('Confetti triggered! (after play)'); // 调试信息
       });
       _audioPlayer.play(AssetSource('audio/match3__06304.wav'));
     }

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "level_1",
+    "title": "英国印象",
+    "description": "收集英国特色卡牌，体验伦敦风情。",
+    "background": "assets/backgrounds/uk_bg.png",
+    "cards": [
+      {"id": "uk_1", "name": "苏格兰风箱手", "desc": "苏格兰文化象征。", "image": "assets/cards/level_1/bagpiper.png"},
+      {"id": "uk_2", "name": "英超球票", "desc": "世界上最大的联赛之一。", "image": "assets/cards/level_1/epl_ticket.png"},
+      {"id": "uk_3", "name": "双层巴士", "desc": "伦敦标志性交通工具。", "image": "assets/cards/level_1/double_decker.png"},
+      {"id": "uk_4", "name": "红衣卫兵", "desc": "白金汉宫守卫。", "image": "assets/cards/level_1/red_guard.png"},
+      {"id": "uk_5", "name": "伦敦眼", "desc": "泰晤士河畔摩天轮。", "image": "assets/cards/level_1/london_eye.png"},
+      {"id": "uk_6", "name": "英式下午茶", "desc": "英国传统美食文化。", "image": "assets/cards/level_1/afternoon_tea.png"},
+      {"id": "uk_7", "name": "报童", "desc": "维多利亚时代街头常见的身影。", "image": "assets/cards/level_1/news_boy.png"},
+      {"id": "uk_8", "name": "皇家乐手", "desc": "英国宫廷传统音乐的传承者。", "image": "assets/cards/level_1/royal_musician.png"},
+      {"id": "uk_9", "name": "古典书店", "desc": "英国文化底蕴的体现。", "image": "assets/cards/level_1/bookstore.png"}
+    ],
+    "props": [
+      {"id": "uk_prop_1", "name": "水晶骰子", "desc": "可额外投掷一次。", "image": "assets/cards/level_1/crystal_dice.png"},
+      {"id": "uk_prop_2", "name": "社交道具", "desc": "可与好友互动。", "image": "assets/cards/level_1/social_prop.png"}
+    ]
+  },
+  {
+    "id": "level_2",
+    "title": "日本风情",
+    "description": "收集日本特色卡牌，感受和风文化。",
+    "background": "assets/backgrounds/japan_bg.png",
+    "cards": [
+      {"id": "jp_1", "name": "富士山", "desc": "日本象征性山峰。", "image": "assets/cards/level_2/fuji.png"},
+      {"id": "jp_2", "name": "日式庭院", "desc": "日本人对自然和谐的追求。", "image": "assets/cards/level_2/japanese_garden.png"},
+      {"id": "jp_3", "name": "艺妓", "desc": "日本传统文化的代表。", "image": "assets/cards/level_2/japanese_maiko.png"},
+      {"id": "jp_4", "name": "夏日祭典", "desc": "日本传统节日。", "image": "assets/cards/level_2/japanese_summer_festival.png"},
+      {"id": "jp_5", "name": "茶道表演", "desc": "日本代表性艺术，修身养性的精神修炼。", "image": "assets/cards/level_2/japanese_tea_ceremony.png"},
+      {"id": "jp_6", "name": "樱花武士", "desc": "日本传统武士文化的象征。", "image": "assets/cards/level_2/japan_cherry_blossom_samurai.png"},
+      {"id": "jp_7", "name": "歌舞伎表演", "desc": "日本传统表演艺术。", "image": "assets/cards/level_2/japanese_kabuki_performance.png"},
+      {"id": "jp_8", "name": "金阁寺", "desc": "日本禅宗文化的深邃意境。", "image": "assets/cards/level_2/kinkaku.png"},
+      {"id": "jp_9", "name": "相扑选手", "desc": "日本的国技，力量技巧于精神修养的完美结合。", "image": "assets/cards/level_2/sumo_wrestler.png"}
+    ],
+    "props": [
+      {"id": "jp_prop_1", "name": "水晶骰子", "desc": "可额外投掷一次。", "image": "assets/cards/level_2/crystal_dice.png"},
+      {"id": "jp_prop_2", "name": "社交道具", "desc": "可与好友互动。", "image": "assets/cards/level_2/social_prop.png"}
+    ]
+  }
+] 

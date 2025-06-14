@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:confetti/confetti.dart';
 import 'dart:async';
 import 'social_page.dart';
+import 'package:provider/provider.dart';
+import 'fragment_model.dart';
 
 // 挑战记录数据模型
 class ChallengeRecord {
@@ -28,7 +30,6 @@ class HousePage extends StatefulWidget {
 }
 
 class _HousePageState extends State<HousePage> with TickerProviderStateMixin {
-  int _fragments = 0;
   int _houseLevel = 1;
   int _likes = 0; // 新增：点赞数
   final int _maxLevel = 6;
@@ -104,7 +105,6 @@ class _HousePageState extends State<HousePage> with TickerProviderStateMixin {
   Future<void> _loadState() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _fragments = prefs.getInt('fragmentCount') ?? 0;
       _houseLevel = prefs.getInt('houseLevel_uk') ?? 1;
       _likes = prefs.getInt('houseLikes_uk') ?? 0;
     });
@@ -112,17 +112,15 @@ class _HousePageState extends State<HousePage> with TickerProviderStateMixin {
 
   Future<void> _saveState() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('fragmentCount', _fragments);
     await prefs.setInt('houseLevel_uk', _houseLevel);
     await prefs.setInt('houseLikes_uk', _likes); // 新增：保存点赞数
   }
 
   Future<void> _upgradeHouse() async {
     int cost = 500 * _houseLevel;
-    if (_houseLevel < _maxLevel && _fragments >= cost) {
+    if (_houseLevel < _maxLevel) {
       setState(() {
         _houseLevel++;
-        _fragments -= cost;
       });
       await _saveState();
       _confettiController.play();
@@ -162,8 +160,8 @@ class _HousePageState extends State<HousePage> with TickerProviderStateMixin {
   }
 
   // 新增：处理挑战记录点击
-  void _handleChallengeTap(ChallengeRecord record) {
-    Navigator.of(context).push(
+  void _handleChallengeTap(ChallengeRecord record) async {
+    final result = await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => SocialPage(
           friendName: record.challengerName,
@@ -171,6 +169,9 @@ class _HousePageState extends State<HousePage> with TickerProviderStateMixin {
         ),
       ),
     );
+    if (result != null && result is int) {
+      Provider.of<FragmentModel>(context, listen: false).add(result);
+    }
   }
 
   // 新增：格式化时间
@@ -231,6 +232,19 @@ class _HousePageState extends State<HousePage> with TickerProviderStateMixin {
         _isPanelVisible = true;
         _panelOffset = 0.0;
       });
+    }
+  }
+
+  void _goToRevengeChallenge() async {
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => SocialPage(isRevenge: true)),
+    );
+    if (result != null && result is int) {
+      Provider.of<FragmentModel>(context, listen: false).add(result);
+    }
+    if (result != null) {
+      _loadState();
+      Navigator.of(context).pop(true); // 通知SlotGame需要刷新
     }
   }
 
@@ -306,7 +320,7 @@ class _HousePageState extends State<HousePage> with TickerProviderStateMixin {
                         children: [
                           Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow.shade700, size: 28),
                           const SizedBox(width: 8),
-                          Text('碎片：$_fragments', style: TextStyle(fontSize: 22, color: Colors.white, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 6, color: Colors.black, offset: Offset(1,1))])),
+                          Text('碎片：${Provider.of<FragmentModel>(context, listen: false).fragmentCount}', style: TextStyle(fontSize: 22, color: Colors.white, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 6, color: Colors.black, offset: Offset(1,1))])),
                           const SizedBox(width: 24),
                           Icon(Icons.favorite, color: Colors.red.shade400, size: 28),
                           const SizedBox(width: 8),
@@ -346,7 +360,7 @@ class _HousePageState extends State<HousePage> with TickerProviderStateMixin {
                                         padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 18),
                                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                                       ),
-                                      onPressed: _fragments >= cost ? _upgradeHouse : null,
+                                      onPressed: _upgradeHouse,
                                       child: Column(
                                         children: [
                                           Text('升级', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1)),
@@ -618,17 +632,5 @@ class _HousePageState extends State<HousePage> with TickerProviderStateMixin {
         ),
       ],
     );
-  }
-
-  @override
-  void dispose() {
-    _confettiController.dispose();
-    _audioPlayer.dispose();
-    _hintTimer?.cancel();
-    _hintDisplayTimer?.cancel();
-    _hintAnimController.dispose();
-    _slideController.dispose();
-    _arrowBreathController.dispose(); // 新增
-    super.dispose();
   }
 } 

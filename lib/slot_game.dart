@@ -10,6 +10,9 @@ import 'package:confetti/confetti.dart';
 import 'models/theme_model.dart';
 import 'house_page.dart';
 import 'social_page.dart';
+import 'continent_carousel_page.dart';
+import 'package:provider/provider.dart';
+import 'fragment_model.dart';
 
 class SlotGame extends StatefulWidget {
   const SlotGame({super.key});
@@ -28,7 +31,6 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
   late List<GlobalKey<SlotReelState>> _reelKeys;
   
   int _spinCount = 0;
-  int _fragmentCount = 0;
   int _remainingSpins = 100; // 新增：剩余转动次数
   String _fragmentGainText = ''; // 碎片增加显示文字
   bool _showingFragmentGain = false; // 是否正在显示碎片增加动画
@@ -60,6 +62,8 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
   // 标记是否已发放全部集齐奖励
   bool _hasGivenAllCollectedReward = false;
 
+  Timer? _robberyTimer;
+
   @override
   void initState() {
     super.initState();
@@ -87,6 +91,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     );
     _startHintMonitor();
     _pageController.addListener(() {});
+    _robberyTimer = Timer.periodic(const Duration(seconds: 30), (_) => _simulateRobbery());
   }
 
   void _initializeGame() {
@@ -127,8 +132,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _spinCount = prefs.getInt('spinCount_${_currentTheme.name}') ?? 0;
-      _fragmentCount = prefs.getInt('fragmentCount') ?? 0;
-      _remainingSpins = prefs.getInt('remainingSpins_${_currentTheme.name}') ?? 100;
+      _remainingSpins = prefs.getInt('remainingSpins') ?? 100;
       
       for (var card in _collection) {
         card.progress = prefs.getInt('card_progress_${_currentTheme.name}_${card.name}') ?? 0;
@@ -139,8 +143,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
   Future<void> _saveState() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('spinCount_${_currentTheme.name}', _spinCount);
-    await prefs.setInt('fragmentCount', _fragmentCount);
-    await prefs.setInt('remainingSpins_${_currentTheme.name}', _remainingSpins);
+    await prefs.setInt('remainingSpins', _remainingSpins);
     for (var card in _collection) {
       await prefs.setInt('card_progress_${_currentTheme.name}_${card.name}', card.progress);
     }
@@ -223,6 +226,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     _hintDisplayTimer?.cancel();
     _hintAnimController.dispose();
     _pageController.dispose();
+    _robberyTimer?.cancel();
     super.dispose();
   }
 
@@ -264,7 +268,6 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
   void _resetProgress() async {
     setState(() {
       _spinCount = 0;
-      _fragmentCount = 0;
       _remainingSpins = 100;
       // 重置所有卡牌的收集状态
       for (var card in _collection) {
@@ -280,8 +283,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     });
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('houseLevel_uk', 1);
-    await prefs.setInt('fragmentCount', 0);
-    await prefs.setInt('remainingSpins_${_currentTheme.name}', 100);
+    await prefs.setInt('remainingSpins', 100);
     // 清除所有卡牌的收集状态（包括所有主题下的卡牌进度）
     for (var card in _collection) {
       await prefs.setInt('card_${card.name}', 0); // 兼容旧数据
@@ -315,8 +317,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     // 处理三个不同的情况
     if (matchCount == 1) {
       _triggerFragmentAnimationOverlay('三个不同', 3, onComplete: () {
-        setState(() => _fragmentCount += 3);
-        _saveState();
+        Provider.of<FragmentModel>(context, listen: false).add(3);
       }, showGainText: true);
       _playFragmentSound();
       return;
@@ -384,8 +385,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     if (wasAlreadyCollected) {
       final fragmentGain = matchCount == 3 ? 50 : 10;
       _triggerFragmentAnimationOverlay(card.name, fragmentGain, onComplete: () {
-        setState(() => _fragmentCount += fragmentGain);
-        _saveState();
+        Provider.of<FragmentModel>(context, listen: false).add(fragmentGain);
       }, showGainText: true);
       _playFragmentSound();
       if (matchCount == 3) {
@@ -425,8 +425,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
       _playCornerConfetti();
       // 奖励10000碎片，动画只播放100个粒子
       _triggerFragmentAnimationOverlay('全部集齐', 100, onComplete: () {
-        setState(() => _fragmentCount += 10000);
-        _saveState();
+        Provider.of<FragmentModel>(context, listen: false).add(10000);
       }, showGainText: true);
       _playFragmentSound();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -440,16 +439,19 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
       MaterialPageRoute(builder: (context) => SocialPage()),
     );
     if (fragments != null && fragments is int) {
-      setState(() {
-        _fragmentCount += fragments;
-      });
+      Provider.of<FragmentModel>(context, listen: false).add(fragments);
     }
+    // 返回后刷新碎片数，防止外部页面有变动
+    _loadState();
   }
 
   void _showHousePage() async {
-    await Navigator.of(context).push(
+    final needRefresh = await Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => HousePage()),
     );
+    if (needRefresh == true) {
+      _loadState();
+    }
   }
 
   void _triggerConfetti() {
@@ -793,14 +795,21 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
 
   AppBar _buildAppBar() {
     return AppBar(
-      title: Text(
-        themeChineseNames[_currentTheme.name] ?? _currentTheme.name,
-        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-      ),
-      backgroundColor: Colors.black.withOpacity(0.3),
-      elevation: 0,
+      backgroundColor: Colors.black87,
+      title: const Text('老虎机'),
       actions: [
-        _buildThemeSwitcher(),
+        IconButton(
+          icon: const Text('切换主题', style: TextStyle(color: Colors.white)),
+          onPressed: () async {
+            final selectedTheme = await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const ContinentCarouselPage()),
+            );
+            if (selectedTheme != null) {
+              _changeTheme(selectedTheme);
+            }
+          },
+        ),
       ],
     );
   }
@@ -816,27 +825,11 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
           Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow.shade700, size: 18),
           const SizedBox(width: 4),
           Text(
-            '$_fragmentCount',
+            '${Provider.of<FragmentModel>(context).fragmentCount}',
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
           ),
         ],
       ),
-    );
-  }
-
-  PopupMenuButton<String> _buildThemeSwitcher() {
-    return PopupMenuButton<String>(
-      tooltip: '切换主题',
-      icon: Icon(Icons.palette_outlined, color: Colors.white),
-      onSelected: _changeTheme,
-      itemBuilder: (BuildContext context) {
-        return themes.keys.map((String key) {
-          return PopupMenuItem<String>(
-            value: key,
-            child: Text(themes[key]!.name),
-          );
-        }).toList();
-      },
     );
   }
 
@@ -1437,6 +1430,26 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
         entry.remove();
       });
     }
+  }
+
+  void _simulateRobbery() {
+    if (Provider.of<FragmentModel>(context, listen: false).fragmentCount <= 0) return;
+    final List<String> funnyNames = [
+      '王铁蛋', '李狗剩', '赵美丽', '钱多多', '孙悟饭',
+      '周星星', '刘能能', '吴小胖', '郑大力', '冯开心'
+    ];
+    final random = Random();
+    final robber = funnyNames[random.nextInt(funnyNames.length)];
+    int lost = (Provider.of<FragmentModel>(context, listen: false).fragmentCount * 0.05).floor();
+    if (lost < 1) lost = 1;
+    setState(() {
+      Provider.of<FragmentModel>(context, listen: false).subtract(lost);
+    });
+    // 系统消息
+    final msg = '【被$robber挑战答题，被抢走了$lost碎片，复仇成功奖励翻倍！】';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 4)),
+    );
   }
 
   // endregion
