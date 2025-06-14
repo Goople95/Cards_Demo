@@ -111,7 +111,9 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
     if (correct) {
       // 延迟一帧再播放彩带，确保UI已经更新
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        print('Confetti triggered! (before play)'); // 调试信息
         _confettiController.play();
+        print('Confetti triggered! (after play)'); // 调试信息
       });
       _audioPlayer.play(AssetSource('audio/match3__06304.wav'));
     }
@@ -377,31 +379,38 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
                 ),
               ),
             ),
-          // 彩带特效，只在答对时显示
-          if (_answered && _isCorrect)
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: ConfettiWidget(
-                confettiController: _confettiController,
-                blastDirection: pi / 2, // 向上发射
-                maxBlastForce: 100,
-                minBlastForce: 80,
-                emissionFrequency: 0.05,
-                numberOfParticles: 20,
-                gravity: 0.1,
-                shouldLoop: false,
-                particleDrag: 0.05, // 添加粒子阻力
-                displayTarget: true, // 显示目标点
-                colors: const [
-                  Colors.green,
-                  Colors.blue,
-                  Colors.pink,
-                  Colors.orange,
-                  Colors.purple,
-                  Colors.yellow,
-                ],
+          // 彩带特效，始终渲染在最顶层，位置与slot页面一致
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 120, // 起点上移，和slot页面一致
+            child: IgnorePointer(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Opacity(
+                  opacity: (_answered && _isCorrect) ? 1.0 : 0.0,
+                  child: ConfettiWidget(
+                    confettiController: _confettiController,
+                    blastDirection: -pi / 2, // 向上喷射
+                    emissionFrequency: 0.08,
+                    numberOfParticles: 30,
+                    maxBlastForce: 40,
+                    minBlastForce: 20,
+                    gravity: 0.15,
+                    shouldLoop: false,
+                    colors: const [
+                      Colors.green,
+                      Colors.blue,
+                      Colors.pink,
+                      Colors.orange,
+                      Colors.purple,
+                      Colors.yellow,
+                    ],
+                  ),
+                ),
               ),
             ),
+          ),
         ],
       ),
     );

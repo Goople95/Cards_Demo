@@ -57,6 +57,9 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
   late List<List<CollectionCard>> _reelCardPools;
   late List<int> _reelIndices;
 
+  // 标记是否已发放全部集齐奖励
+  bool _hasGivenAllCollectedReward = false;
+
   @override
   void initState() {
     super.initState();
@@ -285,6 +288,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
       await prefs.setInt('card_progress_${_currentTheme.name}_${card.name}', 0);
     }
     _initializeGame();
+    _hasGivenAllCollectedReward = false;
     _saveState();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('已重置所有进度，房产等级恢复到1级，碎片和卡牌收集状态也已清零！')),
@@ -296,41 +300,6 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     final counts = <String, int>{};
     for (var name in resultNames) {
       counts[name] = (counts[name] ?? 0) + 1;
-    }
-
-    // 检查是否为水晶骰子道具
-    if (counts.containsKey('水晶骰子')) {
-      final matchCount = counts['水晶骰子']!;
-      final spinsToAdd = matchCount == 3 ? 100 : (matchCount == 2 ? 25 : 0);
-      if (spinsToAdd > 0) {
-        _triggerCrystalDiceEffect();
-        setState(() {
-          _remainingSpins += spinsToAdd;
-          // 更新匹配状态
-          _matchedReels = List.generate(3, (index) => results[index].name == '水晶骰子');
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('水晶骰子发威！获得 $spinsToAdd 次转动机会！')),
-        );
-        _playMatch3Sound();
-        _triggerConfetti();
-        _updateReels();
-      }
-      _saveState();
-      return;
-    }
-
-    // 检查是否为社交道具
-    if (counts.containsKey('社交道具')) {
-      final matchCount = counts['社交道具']!;
-      if (matchCount >= 2) {
-        setState(() {
-          _matchedReels = List.generate(3, (index) => results[index].name == '社交道具');
-        });
-        _updateReels();
-        _showFriendHouse();
-      }
-      return;
     }
 
     // 找出出现次数最多的卡牌
@@ -374,18 +343,55 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     // 更新转轮状态
     _updateReels();
 
+    // 检查是否为水晶骰子道具
+    if (counts.containsKey('水晶骰子')) {
+      final matchCount = counts['水晶骰子']!;
+      final spinsToAdd = matchCount == 3 ? 100 : (matchCount == 2 ? 25 : 0);
+      if (spinsToAdd > 0) {
+        _triggerCrystalDiceEffect();
+        setState(() {
+          _remainingSpins += spinsToAdd;
+          // 更新匹配状态
+          _matchedReels = List.generate(3, (index) => results[index].name == '水晶骰子');
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('水晶骰子发威！获得 $spinsToAdd 次转动机会！')),
+        );
+        _playMatch3Sound();
+        _updateReels();
+      }
+      _saveState();
+      // 不再return，继续判断普通奖励
+    }
+
+    // 检查是否为社交道具
+    if (counts.containsKey('社交道具')) {
+      final matchCount = counts['社交道具']!;
+      if (matchCount >= 2) {
+        setState(() {
+          _matchedReels = List.generate(3, (index) => results[index].name == '社交道具');
+        });
+        _updateReels();
+        _showFriendHouse();
+      }
+      // 不再return，继续判断普通奖励
+    }
+
     // 处理匹配奖励
     final card = _collection.firstWhere((c) => c.name == itemName);
     final wasAlreadyCollected = card.isCollected;
 
     if (wasAlreadyCollected) {
-      // 已收集齐的重复碎片奖励：2连=10，3连=50
       final fragmentGain = matchCount == 3 ? 50 : 10;
       _triggerFragmentAnimationOverlay(card.name, fragmentGain, onComplete: () {
         setState(() => _fragmentCount += fragmentGain);
         _saveState();
       }, showGainText: true);
       _playFragmentSound();
+      if (matchCount == 3) {
+        _playMatch3Sound();
+        _triggerConfetti();
+      }
     } else {
       setState(() {
         if (matchCount >= 2) {
@@ -410,6 +416,23 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     }
 
     _saveState();
+
+    // 检查是否全部卡片收集完成，发放重大奖励
+    final allCollected = _collection.every((c) => c.isCollected);
+    if (allCollected && !_hasGivenAllCollectedReward) {
+      _hasGivenAllCollectedReward = true;
+      // 四角彩带
+      _playCornerConfetti();
+      // 奖励10000碎片，动画只播放100个粒子
+      _triggerFragmentAnimationOverlay('全部集齐', 100, onComplete: () {
+        setState(() => _fragmentCount += 10000);
+        _saveState();
+      }, showGainText: true);
+      _playFragmentSound();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('恭喜你集齐全部卡牌，获得10000碎片重大奖励！')),
+      );
+    }
   }
 
   void _showFriendHouse() async {
@@ -430,7 +453,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
   }
 
   void _triggerConfetti() {
-    print('Confetti triggered!'); // 调试信息
+    setState(() {}); // 保留强制刷新UI
     _confettiController.play();
   }
 
@@ -734,6 +757,35 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
                 ),
               ),
             ),
+          // ConfettiWidget始终在最顶层
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 120, // 起点上移，视觉更靠近老虎机
+            child: IgnorePointer(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: ConfettiWidget(
+                  confettiController: _confettiController,
+                  blastDirection: -pi / 2, // 向上喷射
+                  emissionFrequency: 0.08,
+                  numberOfParticles: 30,
+                  maxBlastForce: 40,
+                  minBlastForce: 20,
+                  gravity: 0.15,
+                  shouldLoop: false,
+                  colors: const [
+                    Colors.green,
+                    Colors.blue,
+                    Colors.pink,
+                    Colors.orange,
+                    Colors.purple,
+                    Colors.yellow,
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1336,6 +1388,55 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     setState(() {
       _isSlotMachineVisible = index == 0;
     });
+  }
+
+  // 四角彩带特效
+  void _playCornerConfetti() {
+    final overlay = Overlay.of(context);
+    final List<Alignment> corners = [
+      Alignment.topLeft,
+      Alignment.topRight,
+      Alignment.bottomLeft,
+      Alignment.bottomRight,
+    ];
+    for (final alignment in corners) {
+      final controller = ConfettiController(duration: const Duration(seconds: 2));
+      final entry = OverlayEntry(
+        builder: (context) => Positioned.fill(
+          child: IgnorePointer(
+            child: Align(
+              alignment: alignment,
+              child: ConfettiWidget(
+                confettiController: controller,
+                blastDirectionality: BlastDirectionality.explosive,
+                emissionFrequency: 0.12,
+                numberOfParticles: 40,
+                maxBlastForce: 40,
+                minBlastForce: 20,
+                gravity: 0.15,
+                shouldLoop: false,
+                colors: const [
+                  Colors.green,
+                  Colors.blue,
+                  Colors.pink,
+                  Colors.orange,
+                  Colors.purple,
+                  Colors.yellow,
+                  Colors.red,
+                  Colors.white,
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      overlay.insert(entry);
+      controller.play();
+      Future.delayed(const Duration(seconds: 3), () {
+        controller.dispose();
+        entry.remove();
+      });
+    }
   }
 
   // endregion
