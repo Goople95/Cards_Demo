@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:confetti/confetti.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'dart:math';
+import 'package:flutter/cupertino.dart';
 
 // 社交挑战页面，支持10道题随机答题，答对500答错200
 class SocialPage extends StatefulWidget {
@@ -27,6 +28,18 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
   late ConfettiController _confettiController;
   late AudioPlayer _audioPlayer;
   final Random _random = Random();
+
+  // 新增：好友房屋等级、点赞数、碎片数、背景图、国家、头像
+  late int _houseLevel;
+  late int _likeCount;
+  late int _fragmentCount;
+  late String _bgImage;
+  late String _country;
+  late String _avatarImg;
+
+  final List<String> _countryList = [
+    '中国', '日本', '英国', '法国', '德国', '意大利', '西班牙', '希腊', '美国', '澳大利亚'
+  ];
 
   final List<String> _funnyNames = [
     '王铁蛋', '李狗剩', '赵美丽', '钱多多', '孙悟饭',
@@ -54,6 +67,15 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
 
   bool _showingCustomDialog = false;
 
+  OverlayEntry? _fragmentOverlayEntry;
+  bool _showResult = false;
+  bool _showButtons = false;
+  int _friendFragmentCount = 0;
+
+  final GlobalKey _friendNameKey = GlobalKey();
+
+  Offset? _resultCenter;
+
   @override
   void initState() {
     super.initState();
@@ -61,6 +83,13 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
     _currentQuiz = (_quizList..shuffle()).first;
     _confettiController = ConfettiController(duration: const Duration(seconds: 2));
     _audioPlayer = AudioPlayer();
+    _houseLevel = 1 + _random.nextInt(6); // 1-6
+    _likeCount = 10 + _random.nextInt(9991); // 10-10000
+    _fragmentCount = 1000 + _random.nextInt(99000); // 1000-99999
+    _friendFragmentCount = _fragmentCount;
+    _bgImage = 'assets/social/Social_House_${1 + _random.nextInt(10)}.png';
+    _country = _countryList[_random.nextInt(_countryList.length)];
+    _avatarImg = 'assets/social/Avatar_${1 + _random.nextInt(10)}.png';
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showQuizDialog();
     });
@@ -80,9 +109,61 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
       _showingCustomDialog = false;
     });
     if (correct) {
-      _confettiController.play();
+      // 延迟一帧再播放彩带，确保UI已经更新
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _confettiController.play();
+      });
       _audioPlayer.play(AssetSource('audio/match3__06304.wav'));
     }
+    // 先碎片飞行动画
+    _playFragmentFlyEffect();
+  }
+
+  void _playFragmentFlyEffect() async {
+    final RenderBox? startBox = _friendNameKey.currentContext?.findRenderObject() as RenderBox?;
+    final RenderBox? stackBox = context.findRenderObject() as RenderBox?;
+    if (startBox == null || stackBox == null) {
+      _showResultAndButtons();
+      return;
+    }
+    // 播放碎片动画音效
+    _audioPlayer.play(AssetSource('audio/get_card_shards_10302.wav'));
+    final startGlobal = startBox.localToGlobal(Offset(startBox.size.width / 2, startBox.size.height / 2));
+    final startLocal = stackBox.globalToLocal(startGlobal);
+    final center = Offset(stackBox.size.width / 2, stackBox.size.height / 2);
+    _fragmentOverlayEntry = OverlayEntry(
+      builder: (context) => _FragmentParticle(
+        key: UniqueKey(),
+        startPosition: startLocal,
+        endPosition: center,
+        count: _fragmentsStolen > 200 ? 200 : _fragmentsStolen,
+        onCompleted: (_) {
+          _fragmentOverlayEntry?.remove();
+          _fragmentOverlayEntry = null;
+          setState(() {
+            _friendFragmentCount -= _fragmentsStolen;
+            _showResult = true;
+          });
+          Future.delayed(const Duration(seconds: 1), () {
+            if (mounted) setState(() => _showButtons = true);
+          });
+        },
+        duration: const Duration(milliseconds: 1000),
+      ),
+    );
+    Overlay.of(context).insert(_fragmentOverlayEntry!);
+    // 记录目标center用于文案定位
+    _resultCenter = center;
+  }
+
+  void _showResultAndButtons() {
+    setState(() {
+      _friendFragmentCount -= _fragmentsStolen;
+      _showResult = true;
+    });
+    Future.delayed(const Duration(seconds: 1), () {
+      if (mounted) setState(() => _showButtons = true);
+    });
   }
 
   void _returnToSlot(bool liked) {
@@ -98,6 +179,7 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
   void dispose() {
     _confettiController.dispose();
     _audioPlayer.dispose();
+    _fragmentOverlayEntry?.remove();
     super.dispose();
   }
 
@@ -110,57 +192,125 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
           // 背景图
           Positioned.fill(
             child: Image.asset(
-              'assets/social/Social_House.png',
+              _bgImage,
               fit: BoxFit.cover,
             ),
           ),
           // 主要内容
           Center(
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisAlignment: MainAxisAlignment.start,
               children: [
-                const SizedBox(height: 16),
-                Text('$_friendName的小屋', 
-                  style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 8),
-                Text(widget.isRevenge ? '（复仇之战）' : '（好友昵称随机生成）', 
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 24),
-                if (_answered)
-                  Column(
+                const SizedBox(height: 48),
+                // 新增：好友信息栏
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.55),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        _isCorrect
-                            ? '答对啦！你抢到了$_fragmentsStolen个碎片！'
-                            : '答错了，只抢到$_fragmentsStolen个碎片。',
-                        style: TextStyle(
-                          color: _isCorrect ? Colors.greenAccent : Colors.orangeAccent,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
+                      CircleAvatar(
+                        backgroundColor: Colors.blue.shade300,
+                        backgroundImage: AssetImage(_avatarImg),
+                        radius: 24,
                       ),
-                      const SizedBox(height: 32),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          ElevatedButton.icon(
-                            icon: Icon(Icons.thumb_up),
-                            label: Text('点赞离开'),
-                            onPressed: () => _returnToSlot(true),
+                          Row(
+                            children: [
+                              Text('$_friendName', key: _friendNameKey, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                              const SizedBox(width: 8),
+                              Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow, size: 18),
+                              const SizedBox(width: 2),
+                              Text('$_friendFragmentCount', style: const TextStyle(color: Colors.yellow, fontSize: 14)),
+                            ],
                           ),
-                          const SizedBox(width: 24),
-                          OutlinedButton(
-                            child: Text('返回老虎机', style: TextStyle(color: Colors.white70)),
-                            onPressed: () => _returnToSlot(false),
+                          Text('房屋等级：$_houseLevel', style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                          Row(
+                            children: [
+                              const Icon(Icons.favorite, color: Colors.redAccent, size: 16),
+                              const SizedBox(width: 2),
+                              Text('$_likeCount', style: const TextStyle(color: Colors.amber, fontSize: 14)),
+                            ],
                           ),
                         ],
                       ),
                     ],
+                  ),
+                ),
+                // 原有内容
+                const SizedBox(height: 16),
+                Text('在$_country的小屋', 
+                  style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(widget.isRevenge ? '（复仇之战）' : '', 
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                if (_showResult)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: _resultCenter?.dy ?? 0,
+                    child: Transform.translate(
+                      offset: const Offset(0, 150),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.65),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(CupertinoIcons.staroflife_fill, color: Colors.yellow.shade700, size: 32),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _isCorrect
+                                    ? '答对啦，你赢了好友$_fragmentsStolen碎片！'
+                                    : '答错啦，你赢了好友$_fragmentsStolen碎片！',
+                                  style: TextStyle(
+                                    color: _isCorrect ? Colors.greenAccent : Colors.orangeAccent,
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (_showButtons) ...[
+                            const SizedBox(height: 32),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                ElevatedButton.icon(
+                                  icon: Icon(Icons.thumb_up),
+                                  label: Text('点赞离开'),
+                                  onPressed: () => _returnToSlot(true),
+                                ),
+                                const SizedBox(width: 24),
+                                OutlinedButton(
+                                  child: Text('返回老虎机', style: TextStyle(color: Colors.white70)),
+                                  onPressed: () => _returnToSlot(false),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                   ),
               ],
             ),
@@ -227,20 +377,201 @@ class _SocialPageState extends State<SocialPage> with TickerProviderStateMixin {
                 ),
               ),
             ),
-          // 全屏彩带特效，仅答对时显示
+          // 彩带特效，只在答对时显示
           if (_answered && _isCorrect)
-            ConfettiWidget(
-              confettiController: _confettiController,
-              blastDirectionality: BlastDirectionality.explosive,
-              shouldLoop: false,
-              emissionFrequency: 0.08,
-              numberOfParticles: 60,
-              gravity: 0.25,
-              maxBlastForce: 30,
-              minBlastForce: 12,
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: ConfettiWidget(
+                confettiController: _confettiController,
+                blastDirection: pi / 2, // 向上发射
+                maxBlastForce: 100,
+                minBlastForce: 80,
+                emissionFrequency: 0.05,
+                numberOfParticles: 20,
+                gravity: 0.1,
+                shouldLoop: false,
+                particleDrag: 0.05, // 添加粒子阻力
+                displayTarget: true, // 显示目标点
+                colors: const [
+                  Colors.green,
+                  Colors.blue,
+                  Colors.pink,
+                  Colors.orange,
+                  Colors.purple,
+                  Colors.yellow,
+                ],
+              ),
             ),
         ],
       ),
     );
   }
-} 
+}
+
+// region FragmentParticle Widget
+class _FragmentParticle extends StatefulWidget {
+  final Offset startPosition;
+  final Offset endPosition;
+  final int count;
+  final void Function(Key) onCompleted;
+  final Duration duration;
+
+  const _FragmentParticle({
+    required Key key,
+    required this.startPosition,
+    required this.endPosition,
+    required this.count,
+    required this.onCompleted,
+    this.duration = const Duration(milliseconds: 500),
+  }) : super(key: key);
+
+  @override
+  State<_FragmentParticle> createState() => _FragmentParticleState();
+}
+
+class _FragmentParticleState extends State<_FragmentParticle> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  final List<Offset> _positions = [];
+  final List<double> _sizes = [];
+  final List<double> _opacities = [];
+  final Random _random = Random();
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: widget.duration,
+      vsync: this,
+    )..addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        widget.onCompleted(widget.key!);
+      }
+    });
+
+    // 初始化粒子
+    for (int i = 0; i < widget.count; i++) {
+      _positions.add(widget.startPosition);
+      _sizes.add(8 + _random.nextDouble() * 8);
+      _opacities.add(0.6 + _random.nextDouble() * 0.4);
+    }
+
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return CustomPaint(
+          painter: _FragmentPainter(
+            positions: _positions,
+            sizes: _sizes,
+            opacities: _opacities,
+            progress: _controller.value,
+            startPosition: widget.startPosition,
+            endPosition: widget.endPosition,
+            random: _random,
+          ),
+          size: Size.infinite,
+        );
+      },
+    );
+  }
+}
+
+class _FragmentPainter extends CustomPainter {
+  final List<Offset> positions;
+  final List<double> sizes;
+  final List<double> opacities;
+  final double progress;
+  final Offset startPosition;
+  final Offset endPosition;
+  final Random random;
+
+  _FragmentPainter({
+    required this.positions,
+    required this.sizes,
+    required this.opacities,
+    required this.progress,
+    required this.startPosition,
+    required this.endPosition,
+    required this.random,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.yellow
+      ..style = PaintingStyle.fill;
+
+    for (int i = 0; i < positions.length; i++) {
+      // 计算每个粒子的当前位置
+      final t = progress;
+      
+      // 为每个粒子生成独立的随机控制点
+      final controlPoint1 = Offset(
+        startPosition.dx + (random.nextDouble() - 0.5) * 200,
+        startPosition.dy - 100 - random.nextDouble() * 100,
+      );
+      
+      final controlPoint2 = Offset(
+        endPosition.dx + (random.nextDouble() - 0.5) * 100,
+        endPosition.dy - 50 - random.nextDouble() * 50,
+      );
+
+      // 三阶贝塞尔曲线
+      final x = _cubicBezier(
+        startPosition.dx,
+        controlPoint1.dx,
+        controlPoint2.dx,
+        endPosition.dx,
+        t,
+      );
+      
+      final y = _cubicBezier(
+        startPosition.dy,
+        controlPoint1.dy,
+        controlPoint2.dy,
+        endPosition.dy,
+        t,
+      );
+
+      // 添加一些随机偏移
+      final randomOffset = Offset(
+        (random.nextDouble() - 0.5) * 30 * (1 - t),
+        (random.nextDouble() - 0.5) * 30 * (1 - t),
+      );
+
+      final currentPosition = Offset(x, y) + randomOffset;
+      
+      // 绘制粒子
+      paint.color = Colors.yellow.withOpacity(opacities[i] * (1 - t * 0.5));
+      canvas.drawCircle(
+        currentPosition,
+        sizes[i] * (1 - t * 0.3),
+        paint,
+      );
+    }
+  }
+
+  double _cubicBezier(double p0, double p1, double p2, double p3, double t) {
+    final oneMinusT = 1 - t;
+    return p0 * oneMinusT * oneMinusT * oneMinusT +
+           3 * p1 * t * oneMinusT * oneMinusT +
+           3 * p2 * t * t * oneMinusT +
+           p3 * t * t * t;
+  }
+
+  @override
+  bool shouldRepaint(covariant _FragmentPainter oldDelegate) {
+    return oldDelegate.progress != progress;
+  }
+}
+// endregion 

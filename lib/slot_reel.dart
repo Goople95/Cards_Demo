@@ -9,6 +9,7 @@ class SlotReel extends StatefulWidget {
   final Duration delay;
   final VoidCallback onStopped;
   final bool isSpinning;
+  final bool isMatched;
 
   const SlotReel({
     Key? key,
@@ -19,6 +20,7 @@ class SlotReel extends StatefulWidget {
     required this.delay,
     required this.onStopped,
     required this.isSpinning,
+    this.isMatched = false,
   }) : super(key: key);
 
   @override
@@ -112,18 +114,27 @@ class _SlotReelState extends State<SlotReel> with AutomaticKeepAliveClientMixin 
           children: widget.cardPool.map((card) {
             final imageName = widget.imagePath[card] ?? 'default.png';
             final imagePath = 'assets/${widget.assetPath}/$imageName';
+            final isCurrentCard = card == widget.targetCard;
             
-            return Container(
-              width: 80,
-              height: 80,
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              width: isCurrentCard && widget.isMatched ? 90 : 80,
+              height: isCurrentCard && widget.isMatched ? 90 : 80,
               decoration: BoxDecoration(
                 color: Colors.brown.shade800.withOpacity(0.9),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.5),
+                border: Border.all(
+                  color: isCurrentCard && widget.isMatched 
+                    ? Colors.yellow.withOpacity(0.8)
+                    : Colors.white.withOpacity(0.5),
+                  width: isCurrentCard && widget.isMatched ? 3 : 1.5,
+                ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.25),
-                    blurRadius: 5,
+                    color: isCurrentCard && widget.isMatched
+                      ? Colors.yellow.withOpacity(0.3)
+                      : Colors.black.withOpacity(0.25),
+                    blurRadius: isCurrentCard && widget.isMatched ? 8 : 5,
                     offset: const Offset(2, 2),
                   )
                 ],
@@ -132,6 +143,24 @@ class _SlotReelState extends State<SlotReel> with AutomaticKeepAliveClientMixin 
                   fit: BoxFit.cover,
                 ),
               ),
+              child: isCurrentCard && widget.isMatched
+                ? Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: Colors.yellow.withOpacity(0.5),
+                        width: 2,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.yellow.withOpacity(0.3),
+                          blurRadius: 10,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                  )
+                : null,
             );
           }).toList(),
         ),

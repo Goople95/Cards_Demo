@@ -33,6 +33,8 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
   String _fragmentGainText = ''; // 碎片增加显示文字
   bool _showingFragmentGain = false; // 是否正在显示碎片增加动画
   bool _isButtonPressed = false;
+  List<bool> _matchedReels = List.filled(3, false); // 新增：跟踪匹配的转轮
+  Timer? _matchEffectTimer; // 新增：匹配特效计时器
 
   final Map<String, AnimationController> _animationControllers = {};
   final Map<String, Animation<double>> _animations = {};
@@ -73,6 +75,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
       cardPool: _reelCardPools[index],
       selectedIndex: _reelIndices[index],
       themeAssetPath: _currentTheme.assetPath,
+      isMatched: _matchedReels[index],
     ));
     _initializeGame();
     _hintAnimController = AnimationController(
@@ -112,6 +115,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
         cardPool: _reelCardPools[index],
         selectedIndex: _reelIndices[index],
         themeAssetPath: _currentTheme.assetPath,
+        isMatched: _matchedReels[index],
       ));
     });
   }
@@ -259,6 +263,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
       _spinCount = 0;
       _fragmentCount = 0;
       _remainingSpins = 100;
+      // 重置所有卡牌的收集状态
       for (var card in _collection) {
         card.progress = 0;
       }
@@ -273,10 +278,16 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('houseLevel_uk', 1);
     await prefs.setInt('fragmentCount', 0);
+    await prefs.setInt('remainingSpins_${_currentTheme.name}', 100);
+    // 清除所有卡牌的收集状态（包括所有主题下的卡牌进度）
+    for (var card in _collection) {
+      await prefs.setInt('card_${card.name}', 0); // 兼容旧数据
+      await prefs.setInt('card_progress_${_currentTheme.name}_${card.name}', 0);
+    }
     _initializeGame();
     _saveState();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已重置所有进度，房产等级和碎片也已清零！')),
+      SnackBar(content: Text('已重置所有进度，房产等级恢复到1级，碎片和卡牌收集状态也已清零！')),
     );
   }
 
@@ -287,58 +298,90 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
       counts[name] = (counts[name] ?? 0) + 1;
     }
 
-    if (counts.containsValue(3)) {
-      final matchedItemName = counts.keys.firstWhere((k) => counts[k] == 3);
-      _handleMatch(matchedItemName, 3);
-    } else if (counts.containsValue(2)) {
-      final matchedItemName = counts.keys.firstWhere((k) => counts[k] == 2);
-      _handleMatch(matchedItemName, 2);
-    } else {
-      // 三个不同的情况，奖励+3
+    // 检查是否为水晶骰子道具
+    if (counts.containsKey('水晶骰子')) {
+      final matchCount = counts['水晶骰子']!;
+      final spinsToAdd = matchCount == 3 ? 100 : (matchCount == 2 ? 25 : 0);
+      if (spinsToAdd > 0) {
+        _triggerCrystalDiceEffect();
+        setState(() {
+          _remainingSpins += spinsToAdd;
+          // 更新匹配状态
+          _matchedReels = List.generate(3, (index) => results[index].name == '水晶骰子');
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('水晶骰子发威！获得 $spinsToAdd 次转动机会！')),
+        );
+        _playMatch3Sound();
+        _triggerConfetti();
+        _updateReels();
+      }
+      _saveState();
+      return;
+    }
+
+    // 检查是否为社交道具
+    if (counts.containsKey('社交道具')) {
+      final matchCount = counts['社交道具']!;
+      if (matchCount >= 2) {
+        setState(() {
+          _matchedReels = List.generate(3, (index) => results[index].name == '社交道具');
+        });
+        _updateReels();
+        _showFriendHouse();
+      }
+      return;
+    }
+
+    // 找出出现次数最多的卡牌
+    String? itemName;
+    int matchCount = 0;
+    counts.forEach((name, count) {
+      if (count > matchCount) {
+        itemName = name;
+        matchCount = count;
+      }
+    });
+
+    // 处理三个不同的情况
+    if (matchCount == 1) {
       _triggerFragmentAnimationOverlay('三个不同', 3, onComplete: () {
         setState(() => _fragmentCount += 3);
         _saveState();
       }, showGainText: true);
       _playFragmentSound();
+      return;
     }
-  }
 
-  void _handleMatch(String itemName, int matchCount) {
-    // 检查是否为水晶骰子道具
-    if (itemName == '水晶骰子') {
-      final spinsToAdd = matchCount == 3 ? 100 : (matchCount == 2 ? 25 : 0);
-      if (spinsToAdd > 0) {
-        _triggerCrystalDiceEffect();
-        setState(() => _remainingSpins += spinsToAdd);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('水晶骰子发威！获得 $spinsToAdd 次转动机会！')),
-        );
-        _playMatch3Sound(); // 播放特殊音效
-        _triggerConfetti();
+    if (itemName == null || matchCount < 2) return;
+
+    // 更新匹配状态
+    setState(() {
+      _matchedReels = List.generate(3, (index) => results[index].name == itemName);
+    });
+
+    // 设置匹配特效计时器
+    _matchEffectTimer?.cancel();
+    _matchEffectTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) {
+        setState(() {
+          _matchedReels = List.filled(3, false);
+        });
+        _updateReels();
       }
-      _saveState();
-      return;
-    }
-    // 新增：社交道具逻辑
-    if (itemName == '社交道具') {
-      _showFriendHouse();
-      return;
-    }
+    });
 
-    // 原有卡牌逻辑
-    CollectionCard? card;
-    try {
-      card = _collection.firstWhere((c) => c.name == itemName);
-    } catch (e) {
-      return; // 如果找不到对应卡牌，直接返回
-    }
+    // 更新转轮状态
+    _updateReels();
 
-    bool wasAlreadyCollected = card!.isCollected;
+    // 处理匹配奖励
+    final card = _collection.firstWhere((c) => c.name == itemName);
+    final wasAlreadyCollected = card.isCollected;
 
     if (wasAlreadyCollected) {
       // 已收集齐的重复碎片奖励：2连=10，3连=50
       final fragmentGain = matchCount == 3 ? 50 : 10;
-      _triggerFragmentAnimationOverlay(card!.name, fragmentGain, onComplete: () {
+      _triggerFragmentAnimationOverlay(card.name, fragmentGain, onComplete: () {
         setState(() => _fragmentCount += fragmentGain);
         _saveState();
       }, showGainText: true);
@@ -346,17 +389,17 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     } else {
       setState(() {
         if (matchCount >= 2) {
-          card!.progress = min(4, card!.progress + (matchCount == 3 ? 4 : 1));
+          card.progress = min(4, card.progress + (matchCount == 3 ? 4 : 1));
         }
       });
 
-      bool isNowCollected = card!.isCollected;
+      bool isNowCollected = card.isCollected;
 
       if (isNowCollected && !wasAlreadyCollected) {
-        _animationControllers[card!.name]?.forward().then((_) => _animationControllers[card!.name]?.reverse());
+        _animationControllers[card.name]?.forward().then((_) => _animationControllers[card.name]?.reverse());
         _playCollectionCompleteSound();
       } else if (!isNowCollected) {
-        _animationControllers[card!.name]?.forward().then((_) => _animationControllers[card!.name]?.reverse());
+        _animationControllers[card.name]?.forward().then((_) => _animationControllers[card.name]?.reverse());
         _playMatch2Sound();
       }
 
@@ -365,6 +408,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
         _triggerConfetti();
       }
     }
+
     _saveState();
   }
 
@@ -386,6 +430,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
   }
 
   void _triggerConfetti() {
+    print('Confetti triggered!'); // 调试信息
     _confettiController.play();
   }
 
@@ -490,7 +535,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
 
   void _cheatMatch(int matchCount) async {
     if (_reelKeys.any((key) => key.currentState?.isSpinning ?? true)) return;
-    if (_collection.isEmpty) return; // 确保集合已初始化
+    if (_collection.isEmpty) return;
     if (_remainingSpins <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('转动次数已用完，请使用刷新按钮重置！')),
@@ -517,7 +562,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
       // 2连：前两个轮子显示相同卡牌，第三个轮子随机
       futures.add(_reelKeys[0].currentState!.spinTo(targetCard.name));
       futures.add(_reelKeys[1].currentState!.spinTo(targetCard.name));
-      futures.add(_reelKeys[2].currentState!.spin()); // 第三个轮子随机
+      futures.add(_reelKeys[2].currentState!.spin());
     } else {
       // 3连：所有轮子都显示相同的卡牌
       futures = _reelKeys.map((key) => key.currentState!.spinTo(targetCard.name)).toList();
@@ -529,7 +574,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
       if (mounted) {
         setState(() {
           _spinCount++;
-          _remainingSpins--; // 作弊也消耗转动次数
+          _remainingSpins--;
         });
         _checkResult(finalResults);
         _saveState();
@@ -537,6 +582,45 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     } catch (e) {
       // No error logging
     }
+  }
+
+  void _cheatProp(String propName, int matchCount) async {
+    if (_reelKeys.any((key) => key.currentState?.isSpinning ?? true)) return;
+    if (_remainingSpins <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('转动次数已用完，请使用刷新按钮重置！')),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    _playSpinStartSound();
+    setState(() => _isButtonPressed = true);
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (mounted) {
+        setState(() => _isButtonPressed = false);
+      }
+    });
+
+    List<Future<CollectionCard>> futures = [];
+    for (int i = 0; i < 3; i++) {
+      if (i < matchCount) {
+        futures.add(_reelKeys[i].currentState!.spinTo(propName));
+      } else {
+        futures.add(_reelKeys[i].currentState!.spin());
+      }
+    }
+
+    try {
+      final finalResults = await Future.wait(futures);
+      if (mounted) {
+        setState(() {
+          _spinCount++;
+          _remainingSpins--;
+        });
+        _checkResult(finalResults);
+        _saveState();
+      }
+    } catch (e) {}
   }
 
   void _triggerCrystalDiceEffect() {
@@ -731,7 +815,7 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildWideButton('重置', _buildResetButton(), color: Colors.red.shade800),
+                  _buildWideButton('重置', _buildResetButton()),
                   _buildWideButton('2连作弊', _buildMiniCheatButton('2连作弊', () => _cheatMatch(2), color: Colors.purple.shade700)),
                   _buildWideButton('3连作弊', _buildMiniCheatButton('3连作弊', () => _cheatMatch(3), color: Colors.orange.shade700)),
                   _buildWideButton('水晶作弊', _buildMiniCheatButton('水晶作弊', () => _cheatProp('水晶骰子', 2), color: Colors.blue.shade700)),
@@ -745,6 +829,35 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
             ],
           ),
         ),
+        // 添加水晶特效
+        if (_crystalDiceEffectVisible)
+          CrystalDiceEffect(
+            count: 50,
+            duration: const Duration(milliseconds: 1200),
+            targetKey: _spinProgressKey, // 使用计数条的key作为目标点
+            onCompleted: () {
+              if (mounted) {
+                setState(() => _crystalDiceEffectVisible = false);
+              }
+            },
+          ),
+        // 添加匹配特效
+        if (_matchedReels.any((matched) => matched))
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    colors: [
+                      Colors.yellow.withOpacity(0.2),
+                      Colors.transparent,
+                    ],
+                    stops: const [0.0, 0.8],
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -908,32 +1021,56 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
         minimumSize: const Size(60, 30),
       ),
       onPressed: () {
-        _showStyledDialog(
+        showDialog(
           context: context,
-          title: '重置进度?',
-          content: const Text(
-            '将清除当前主题的所有卡牌和碎片进度，并重置转动次数到100次，确定吗?',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white, fontSize: 16),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('取消', style: TextStyle(color: Colors.white70, fontSize: 16)),
-            ),
-            const SizedBox(width: 15),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red.shade800,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          barrierDismissible: false,
+          builder: (context) => Dialog(
+            backgroundColor: const Color(0xFF232323),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    '确认重置',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    '确定要重置所有进度吗？\n房产等级将恢复到1级，碎片和卡牌收集状态将被清零！',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70, fontSize: 16),
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.grey.shade700,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('取消', style: TextStyle(color: Colors.white)),
+                      ),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red.shade800,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          _resetProgress();
+                        },
+                        child: const Text('确定', style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              onPressed: () {
-                _resetProgress();
-                Navigator.of(context).pop();
-              },
-              child: const Text('重置', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
             ),
-          ],
+          ),
         );
       },
       child: const Text('重置', style: TextStyle(color: Colors.white, fontSize: 12)),
@@ -1147,44 +1284,6 @@ class _SlotGameState extends State<SlotGame> with TickerProviderStateMixin, Auto
     );
   }
 
-  // 新增作弊道具方法
-  void _cheatProp(String propName, int matchCount) async {
-    if (_reelKeys.any((key) => key.currentState?.isSpinning ?? true)) return;
-    if (_remainingSpins <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('转动次数已用完，请使用刷新按钮重置！')),
-      );
-      return;
-    }
-    ScaffoldMessenger.of(context).removeCurrentSnackBar();
-    _playSpinStartSound();
-    setState(() => _isButtonPressed = true);
-    Future.delayed(const Duration(milliseconds: 200), () {
-      if (mounted) {
-        setState(() => _isButtonPressed = false);
-      }
-    });
-    List<Future<CollectionCard>> futures = [];
-    for (int i = 0; i < 3; i++) {
-      if (i < matchCount) {
-        futures.add(_reelKeys[i].currentState!.spinTo(propName));
-      } else {
-        futures.add(_reelKeys[i].currentState!.spin());
-      }
-    }
-    try {
-      final finalResults = await Future.wait(futures);
-      if (mounted) {
-        setState(() {
-          _spinCount++;
-          _remainingSpins--;
-        });
-        _checkResult(finalResults);
-        _saveState();
-      }
-    } catch (e) {}
-  }
-
   Widget _buildSlotMachineContainer() {
     final boxDecoration = BoxDecoration(
       color: const Color(0xFF6B4F3A),
@@ -1247,12 +1346,14 @@ class SlotReel extends StatefulWidget {
   final List<CollectionCard> cardPool;
   final String themeAssetPath;
   final int selectedIndex;
+  final bool isMatched;
 
   const SlotReel({
     Key? key,
     required this.cardPool,
     required this.themeAssetPath,
     required this.selectedIndex,
+    required this.isMatched,
   }) : super(key: key);
 
   @override
@@ -1591,7 +1692,7 @@ class CrystalDiceEffect extends StatefulWidget {
 class _CrystalDiceEffectState extends State<CrystalDiceEffect> with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
-  late List<_ParticleData> _particles;
+  List<_ParticleData>? _particles;
   Offset? _targetCenter;
   final Random _random = Random();
 
@@ -1602,15 +1703,30 @@ class _CrystalDiceEffectState extends State<CrystalDiceEffect> with SingleTicker
       ..forward().whenComplete(() {
         if (widget.onCompleted != null) widget.onCompleted!();
       });
+
+    // 延迟一帧以获取正确的目标位置（转换为动画Stack的局部坐标）
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (widget.targetKey?.currentContext != null) {
+      if (widget.targetKey?.currentContext != null && context.findRenderObject() is RenderBox) {
         final box = widget.targetKey!.currentContext!.findRenderObject() as RenderBox;
-        final center = box.localToGlobal(Offset(box.size.width / 2, box.size.height / 2));
-        setState(() => _targetCenter = center);
+        final targetPosition = box.localToGlobal(Offset.zero);
+        final targetSize = box.size;
+        final globalCenter = Offset(
+          targetPosition.dx + targetSize.width / 2,
+          targetPosition.dy + targetSize.height / 2,
+        );
+        final stackBox = context.findRenderObject() as RenderBox;
+        final localCenter = stackBox.globalToLocal(globalCenter);
+        setState(() {
+          _targetCenter = localCenter;
+        });
       }
     });
-    // 初始化粒子，数量由count参数决定
-    final size = WidgetsBinding.instance.window.physicalSize / WidgetsBinding.instance.window.devicePixelRatio;
+    _animation = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
+  }
+
+  void _initParticlesIfNeeded(Size size) {
+    if (_particles != null) return;
+    final center = Offset(size.width / 2, size.height / 2);
     _particles = List.generate(widget.count, (i) {
       final angle = _random.nextDouble() * 2 * pi;
       final distance = 200.0 + _random.nextDouble() * 100;
@@ -1618,7 +1734,7 @@ class _CrystalDiceEffectState extends State<CrystalDiceEffect> with SingleTicker
         cos(angle) * distance,
         sin(angle) * distance,
       );
-      final start = Offset(size.width / 2, size.height / 2) + randomOffset;
+      final start = center + randomOffset;
       return _ParticleData(
         startPosition: start,
         controlPoint1: Offset(
@@ -1635,24 +1751,26 @@ class _CrystalDiceEffectState extends State<CrystalDiceEffect> with SingleTicker
         opacity: 0.7 + _random.nextDouble() * 0.3,
       );
     });
-    _animation = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
-    // 动态获取目标点
+    _initParticlesIfNeeded(size);
+    // 动态获取目标点（同样转换为局部坐标）
     Offset? dynamicTargetCenter;
-    if (widget.targetKey?.currentContext != null) {
+    if (widget.targetKey?.currentContext != null && context.findRenderObject() is RenderBox) {
       final box = widget.targetKey!.currentContext!.findRenderObject() as RenderBox;
-      dynamicTargetCenter = box.localToGlobal(Offset(box.size.width / 2, box.size.height / 2));
+      final targetPosition = box.localToGlobal(Offset.zero);
+      final targetSize = box.size;
+      final globalCenter = Offset(
+        targetPosition.dx + targetSize.width / 2,
+        targetPosition.dy + targetSize.height / 2,
+      );
+      final stackBox = context.findRenderObject() as RenderBox;
+      dynamicTargetCenter = stackBox.globalToLocal(globalCenter);
     }
+
     return IgnorePointer(
       child: AnimatedBuilder(
         animation: _controller,
@@ -1660,7 +1778,7 @@ class _CrystalDiceEffectState extends State<CrystalDiceEffect> with SingleTicker
           final t = _animation.value;
           final target = dynamicTargetCenter ?? _targetCenter ?? Offset(size.width - 40, 40);
           return Stack(
-            children: _particles.map((particle) {
+            children: (_particles ?? []).map((particle) {
               final x = _cubicBezier(
                 t,
                 particle.startPosition.dx,
